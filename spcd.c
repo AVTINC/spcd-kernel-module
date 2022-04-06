@@ -26,13 +26,13 @@
 #include <linux/platform_device.h>
 
 static int spcd_probe(struct platform_device *pdev) {
-	pr_info("SPCD probe\n");
+	pr_alert(" %s\n", __FUNCTION__);
 
 	return 0;
 };
 
 static int spcd_remove(struct platform_device *pdev) {
-	pr_info("SPCD remove\n");
+	pr_alert(" %s\n", __FUNCTION__);
 
 	return 0;
 };
