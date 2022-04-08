@@ -41,6 +41,16 @@ struct spcd_data {
 	int			irq_12v_status;
 };
 
+
+// Top half IRQ Handler.
+static irqreturn_t spcd_handle_irq(int irq, void *dev_id) {
+	struct spcd_data *spcd = dev_id;
+
+	// TODO: Read spcd sate.
+	return IRQ_HANDLED;
+};
+
+
 static int spcd_probe(struct platform_device *pdev) {
 	struct device *dev = &pdev->dev;
 	struct spcd_data *spcd_data;
@@ -101,21 +111,6 @@ static struct platform_driver spcd_driver = {
 	},
 };
 module_platform_driver(spcd_driver);
-
-
-// Top half IRQ Handler.
-static irqreturn_t spcd_handle_irq(int irq, void *dev_id) {
-	struct spcd_data *spcd = dev_id;
-
-	// TODO: Read spcd sate.
-	return IRQ_HANDLED;
-};
-
-
-
-
-
-
 
 MODULE_AUTHOR("bryan.varner@e-gineering.com");
 MODULE_DESCRIPTION("AVT SPCD Platform Driver.");
