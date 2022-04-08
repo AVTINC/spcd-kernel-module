@@ -20,10 +20,20 @@
     along with this program; if not, write to the Free Software
     Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  US
 */
-#include <linux/module.h>
-#include <linux/kernel.h>
+#include <linux/cdev.h>
+#include <linux/fs.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
+#include <linux/err.h>
+#include <linux/gpio.h>
+#include <linux/of.h>
+#include <linux/gpio/consumer.h>
+#include <linux/kernel.h>
 #include <linux/platform_device.h>
+#include <linux/module.h>
+#include <linux/poll.h>
+#include <linux/pwm.h>
+#include <linux/uaccess.h>
 
 struct spcd_data {
 	struct device		*dev;
@@ -91,6 +101,21 @@ static struct platform_driver spcd_driver = {
 	},
 };
 module_platform_driver(spcd_driver);
+
+
+// Top half IRQ Handler.
+static irqreturn_t spcd_handle_irq(int irq, void *dev_id) {
+	struct spcd_data *spcd = dev_id;
+
+	// TODO: Read spcd sate.
+	return IRQ_HANDLED;
+};
+
+
+
+
+
+
 
 MODULE_AUTHOR("bryan.varner@e-gineering.com");
 MODULE_DESCRIPTION("AVT SPCD Platform Driver.");
