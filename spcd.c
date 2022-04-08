@@ -65,7 +65,7 @@ static int spcd_probe(struct platform_device *pdev) {
 	// TODO: Request an IRQ for the input GPIO.
 	spcd_data->irq_12v_status = gpiod_to_irq(spcd_data->gpio_in_12v_status);
 	if (spcd_data->irq_12v_status < 0) {
-		dev_err(dev, "failed to get IRQ for in_12v_status: err=%ld\n", PTR_ERR(spcd_data->irq_12v_status));
+		dev_err(dev, "failed to get IRQ for in_12v_status: err=%d\n", spcd_data->irq_12v_status);
 		return spcd_data->irq_12v_status;
 	};
 	devm_request_irq(dev, spcd_data->irq_12v_status, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_12v_status", spcd_data);
