@@ -25,14 +25,59 @@
 #include <linux/init.h>
 #include <linux/platform_device.h>
 
+struct spcd_data {
+	struct device		*dev;
+	struct  gpio_desc	*gpio_in_12v_status;
+	int			irq_12v_status;
+};
+
 static int spcd_probe(struct platform_device *pdev) {
+	struct device *dev = &pdev->dev;
+	struct spcd_data *spcd_data;
+
+	int ret = 0;
+
 	pr_alert(" %s\n", __FUNCTION__);
 
-	return 0;
+	// create the driver data....
+	spcd_data = kzalloc(sizeof(struct spcd_data), GFP_KERNEL);
+	if (!spcd_data) {
+		return -ENOMEM;
+	}
+	spcd_data->dev = dev;
+
+	// Get an input GPIO.
+	spcd_data->gpio_in_12v_status = devm_gpiod_get(dev, "in_12v_status", GPIOD_IN);
+	if (IS_ERR(spcd_data->gpio_in_12v_status)) {
+		dev_err(dev, "failed to get in_12v_status-gpiod: err=%ld\n", PTR_ERR(spcd_data->gpio_in_12v_status));
+		return PTR_ERR(spcd_data->gpio_in_12v_status);
+	}
+	// TODO: Request an IRQ for the input GPIO.
+	spcd_data->irq_12v_status = gpiod_to_irq(spcd_data->gpio_in_12v_status);
+	if (spcd_data->irq_12v_status < 0) {
+		dev_err(dev, "failed to get IRQ for in_12v_status: err=%ld\n", PTR_ERR(spcd_data->irq_12v_status));
+		return spcd_data->irq_12v_status;
+	};
+	devm_request_irq(dev, spcd_data->irq_12v_status, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_12v_status", spcd_data);
+
+	// TODO: Initial GPIO state tracking vars.
+
+
+	platform_set_drvdata(pdev, spcd_data);
+
+	// TODO sync state with a set / read.
+
+	// Associate sysfs attribute groups.
+
+	return ret;
 };
 
 static int spcd_remove(struct platform_device *pdev) {
+	struct spcd_data *spcd_data = platform_get_drvdata(pdev);
+
 	pr_alert(" %s\n", __FUNCTION__);
+
+	kfree(spcd_data);
 
 	return 0;
 };
