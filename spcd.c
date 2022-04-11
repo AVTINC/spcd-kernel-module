@@ -102,12 +102,21 @@ static int spcd_remove(struct platform_device *pdev) {
 	return 0;
 };
 
+
+static const struct of_device_id of_spcd_match[] = {
+        { .compatible = "avt,spcd", },
+        {},
+};
+
+MODULE_DEVICE_TABLE(of, of_spcd_match);
+
 static struct platform_driver spcd_driver = {
 	.probe = spcd_probe,
 	.remove = spcd_remove,
 	.driver = {
 		.name = "spcd",
 		.owner = THIS_MODULE,
+		.of_match_table = of_spcd_match,
 	},
 };
 module_platform_driver(spcd_driver);
