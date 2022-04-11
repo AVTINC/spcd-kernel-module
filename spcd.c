@@ -69,7 +69,7 @@ static int spcd_probe(struct platform_device *pdev) {
 	// Get an input GPIO.
 	spcd_data->gpio_in_12v_status = devm_gpiod_get(dev, "in-12v-status", GPIOD_IN);
 	if (IS_ERR(spcd_data->gpio_in_12v_status)) {
-		dev_err(dev, "failed to get in-12v-status-gpiod: err=%ld\n", PTR_ERR(spcd_data->gpio_in_12v_status));
+		dev_err(dev, "failed to get in-12v-status-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_12v_status));
 		return PTR_ERR(spcd_data->gpio_in_12v_status);
 	}
 	// TODO: Request an IRQ for the input GPIO.
