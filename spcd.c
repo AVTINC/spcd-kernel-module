@@ -120,7 +120,7 @@ static int spcd_probe(struct platform_device *pdev) {
 	devm_request_irq(dev, spcd_data->irq_valve_open, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_valve_open", spcd_data);
 
 
-	spcd_data->gpio_in_overpressure = devm_gpiod_get(dev, "in-valve-overpressure", GPIOD_IN);
+	spcd_data->gpio_in_overpressure = devm_gpiod_get(dev, "in-overpressure", GPIOD_IN);
 	if (IS_ERR(spcd_data->gpio_in_overpressure)) {
 		dev_err(dev, "failed to get in-overpressure-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_overpressure));
 		return PTR_ERR(spcd_data->gpio_in_overpressure);
