@@ -64,7 +64,7 @@ struct spcd_data {
 	struct gpio_desc	*gpio_out_buzzer_high_0;
 	struct gpio_desc	*gpio_out_buzzer_high_1;
 	struct gpio_desc	*gpio_out_buzzer_high_2;
-	struct gpio_desc	*gpio_out_blower_stat
+	struct gpio_desc	*gpio_out_blower_stat;
 	struct gpio_desc	*gpio_out_1min;
 };
 
