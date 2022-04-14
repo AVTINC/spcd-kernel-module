@@ -98,7 +98,7 @@ static int spcd_probe(struct platform_device *pdev) {
 		return PTR_ERR(spcd_data->gpio_in_valve_open);
 	}
 	spcd_data->irq_valve_open = gpiod_to_irq(spcd_data->gpio_in_valve_open);
-	if (spcd_data->in_valve_open < 0) {
+	if (spcd_data->irq_valve_open < 0) {
 		dev_err(dev, "failed to get IRQ for in_valve_open: err=%d\n", spcd_data->irq_valve_open);
 		return spcd_data->irq_valve_open;
 	}
