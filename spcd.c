@@ -53,8 +53,6 @@ struct spcd_data {
 	int			irq_mode;
 
 
-	struct gpio_desc	*gpio_out_valve_control;
-	struct gpio_desc	*gpio_out_blower_control;
 	struct gpio_desc	*gpio_out_pwr_hold; // Unused
 	struct gpio_desc	*gpio_out_wdt_alert;
 
@@ -161,24 +159,12 @@ static int spcd_probe(struct platform_device *pdev) {
 
 
 	// Push-pull outputs.
-	spcd_data->gpio_out_valve_control = devm_gpiod_get(dev, "out-valve-control", GPIOD_OUT_LOW);
-	if (IS_ERR(spcd_data->gpio_out_valve_control)) {
-		dev_err(dev, "failed to get out-valve-control-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_valve_control));
-		return PTR_ERR(spcd_data->gpio_out_valve_control);
-	}
-
-	spcd_data->gpio_out_blower_control = devm_gpiod_get(dev, "out-blower-control", GPIOD_OUT_LOW);
-	if (IS_ERR(spcd_data->gpio_out_blower_control)) {
-		dev_err(dev, "failed to get gpio_out_blower_control-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_blower_control));
-		return PTR_ERR(spcd_data->gpio_out_blower_control);
-	}
-
 	spcd_data->gpio_out_pwr_hold = devm_gpiod_get(dev, "out-pwr-hold", GPIOD_OUT_LOW);
 	if (IS_ERR(spcd_data->gpio_out_pwr_hold)) {
 		dev_err(dev, "failed to get out-pwr-hold-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_pwr_hold));
 		return PTR_ERR(spcd_data->gpio_out_pwr_hold);
 	}
-	
+
 	spcd_data->gpio_out_wdt_alert = devm_gpiod_get(dev, "out-wdt-alert", GPIOD_OUT_LOW);
 	if (IS_ERR(spcd_data->gpio_out_wdt_alert)) {
 		dev_err(dev, "failed to get out-wdt-alert-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_wdt_alert));
