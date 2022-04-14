@@ -39,6 +39,18 @@ struct spcd_data {
 	struct device		*dev;
 	struct  gpio_desc	*gpio_in_12v_status;
 	int			irq_12v_status;
+
+	struct gpio_desc	*gpio_in_valve_open;
+	int			irq_valve_open;
+
+	struct gpio_desc	*gpio_in_overpressure;
+	int			irq_overpressure;
+
+	struct gpio_desc	*gpio_in_stuckon;
+	int			irq_stuckon;
+
+	struct gpio_desc	*gpio_in_mode;
+	int			irq_mode;
 };
 
 
@@ -66,19 +78,71 @@ static int spcd_probe(struct platform_device *pdev) {
 	}
 	spcd_data->dev = dev;
 
-	// Get an input GPIO.
+	// Setup Input GPIOS and IRQs
 	spcd_data->gpio_in_12v_status = devm_gpiod_get(dev, "in-12v-status", GPIOD_IN);
 	if (IS_ERR(spcd_data->gpio_in_12v_status)) {
 		dev_err(dev, "failed to get in-12v-status-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_12v_status));
 		return PTR_ERR(spcd_data->gpio_in_12v_status);
 	}
-	// TODO: Request an IRQ for the input GPIO.
 	spcd_data->irq_12v_status = gpiod_to_irq(spcd_data->gpio_in_12v_status);
 	if (spcd_data->irq_12v_status < 0) {
 		dev_err(dev, "failed to get IRQ for in_12v_status: err=%d\n", spcd_data->irq_12v_status);
 		return spcd_data->irq_12v_status;
-	};
+	}
 	devm_request_irq(dev, spcd_data->irq_12v_status, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_12v_status", spcd_data);
+
+
+	spcd_data->gpio_in_valve_open = devm_gpiod_get(dev, "in-valve-open", GPIOD_IN);
+	if (IS_ERR(spcd_data->gpio_in_valve_open)) {
+		dev_err(dev, "failed to get in-valve-open-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_valve_open));
+		return PTR_ERR(spcd_data->gpio_in_valve_open);
+	}
+	spcd_data->irq_valve_open = gpiod_to_irq(spcd_data->gpio_in_valve_open);
+	if (spcd_data->in_valve_open < 0) {
+		dev_err(dev, "failed to get IRQ for in_valve_open: err=%d\n", spcd_data->irq_valve_open);
+		return spcd_data->irq_valve_open;
+	}
+	devm_request_irq(dev, spcd_data->irq_valve_open, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_valve_open", spcd_data);
+
+
+	spcd_data->gpio_in_overpressure = devm_gpiod_get(dev, "in-valve-overpressure", GPIOD_IN);
+	if (IS_ERR(spcd_data->gpio_in_overpressure)) {
+		dev_err(dev, "failed to get in-overpressure-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_overpressure));
+		return PTR_ERR(spcd_data->gpio_in_overpressure);
+	}
+	spcd_data->irq_overpressure = gpiod_to_irq(spcd_data->gpio_in_overpressure);
+	if (spcd_data->irq_overpressure < 0) {
+		dev_err(dev, "failed to get IRQ for in_overpressure: err=%d\n", spcd_data->irq_overpressure);
+		return spcd_data->irq_overpressure;
+	}
+	devm_request_irq(dev, spcd_data->irq_overpressure, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_overpressure", spcd_data);
+
+
+	spcd_data->gpio_in_stuckon = devm_gpiod_get(dev, "in-stuckon", GPIOD_IN);
+	if (IS_ERR(spcd_data->gpio_in_stuckon)) {
+		dev_err(dev, "failed to get in-stuckon-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_stuckon));
+		return PTR_ERR(spcd_data->gpio_in_stuckon);
+	}
+	spcd_data->irq_stuckon = gpiod_to_irq(spcd_data->gpio_in_stuckon);
+	if (spcd_data->irq_stuckon < 0) {
+		dev_err(dev, "failed to get IRQ for in_stuckon: err=%d\n", spcd_data->irq_stuckon);
+		return spcd_data->irq_stuckon;
+	}
+	devm_request_irq(dev, spcd_data->irq_stuckon, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_stuckon", spcd_data);
+
+
+	spcd_data->gpio_in_mode = devm_gpiod_get(dev, "in-mode", GPIOD_IN);
+	if (IS_ERR(spcd_data->gpio_in_mode)) {
+		dev_err(dev, "failed to get in-mode-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_mode));
+		return PTR_ERR(spcd_data->gpio_in_mode);
+	}
+	spcd_data->irq_mode = gpiod_to_irq(spcd_data->gpio_in_mode);
+	if (spcd_data->irq_mode < 0) {
+		dev_err(dev, "failed to get IRQ for in_mode: err=%d\n", spcd_data->irq_mode);
+		return spcd_data->irq_mode;
+	}
+	devm_request_irq(dev, spcd_data->irq_mode, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_mode", spcd_data);
+
 
 	// TODO: Initial GPIO state tracking vars.
 
