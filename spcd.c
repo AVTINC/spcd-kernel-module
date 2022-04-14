@@ -51,6 +51,21 @@ struct spcd_data {
 
 	struct gpio_desc	*gpio_in_mode;
 	int			irq_mode;
+
+
+	struct gpio_desc	*gpio_out_valve_control;
+	struct gpio_desc	*gpio_out_blower_control;
+	struct gpio_desc	*gpio_out_pwr_hold; // Unused
+	struct gpio_desc	*gpio_out_wdt_alert;
+
+	struct gpio_desc	*gpio_out_buzzer_low;
+	struct gpio_desc	*gpio_out_buzzer_medium_0;
+	struct gpio_desc	*gpio_out_buzzer_medium_1;
+	struct gpio_desc	*gpio_out_buzzer_high_0;
+	struct gpio_desc	*gpio_out_buzzer_high_1;
+	struct gpio_desc	*gpio_out_buzzer_high_2;
+	struct gpio_desc	*gpio_out_blower_stat
+	struct gpio_desc	*gpio_out_1min;
 };
 
 
@@ -144,7 +159,86 @@ static int spcd_probe(struct platform_device *pdev) {
 	devm_request_irq(dev, spcd_data->irq_mode, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_mode", spcd_data);
 
 
+
+	// Push-pull outputs.
+	spcd_data->gpio_out_valve_control = devm_gpiod_get(dev, "out-valve-control", GPIOD_OUT_LOW);
+	if (IS_ERR(spcd_data->gpio_out_valve_control)) {
+		dev_err(dev, "failed to get out-valve-control-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_valve_control));
+		return PTR_ERR(spcd_data->gpio_out_valve_control);
+	}
+
+	spcd_data->gpio_out_blower_control = devm_gpiod_get(dev, "out-blower-control", GPIOD_OUT_LOW);
+	if (IS_ERR(spcd_data->gpio_out_blower_control)) {
+		dev_err(dev, "failed to get gpio_out_blower_control-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_blower_control));
+		return PTR_ERR(spcd_data->gpio_out_blower_control);
+	}
+
+	spcd_data->gpio_out_pwr_hold = devm_gpiod_get(dev, "out-pwr-hold", GPIOD_OUT_LOW);
+	if (IS_ERR(spcd_data->gpio_out_pwr_hold)) {
+		dev_err(dev, "failed to get out-pwr-hold-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_pwr_hold));
+		return PTR_ERR(spcd_data->gpio_out_pwr_hold);
+	}
+	
+	spcd_data->gpio_out_wdt_alert = devm_gpiod_get(dev, "out-wdt-alert", GPIOD_OUT_LOW);
+	if (IS_ERR(spcd_data->gpio_out_wdt_alert)) {
+		dev_err(dev, "failed to get out-wdt-alert-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_wdt_alert));
+		return PTR_ERR(spcd_data->gpio_out_wdt_alert);
+	}
+
+
+	// All outputs on the I2C expander are open-drain.
+	spcd_data->gpio_out_buzzer_low = devm_gpiod_get(dev, "out-buzzer-low", GPIOD_OUT_HIGH_OPEN_DRAIN);
+	if (IS_ERR(spcd_data->gpio_out_buzzer_low)) {
+		dev_err(dev, "failed to get out-buzzer-low-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_low));
+		return PTR_ERR(spcd_data->gpio_out_buzzer_low);
+	}
+	spcd_data->gpio_out_buzzer_medium_0 = devm_gpiod_get_index(dev, "out-buzzer-medium", 0, GPIOD_OUT_HIGH_OPEN_DRAIN);
+	if (IS_ERR(spcd_data->gpio_out_buzzer_medium_0)) {
+		dev_err(dev, "failed to get out-buzzer-medium-gpios[0]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_medium_0));
+		return PTR_ERR(spcd_data->gpio_out_buzzer_medium_0);
+	}
+	spcd_data->gpio_out_buzzer_medium_1 = devm_gpiod_get_index(dev, "out-buzzer-medium", 1, GPIOD_OUT_HIGH_OPEN_DRAIN);
+	if (IS_ERR(spcd_data->gpio_out_buzzer_medium_1)) {
+		dev_err(dev, "failed to get out-buzzer-medium-gpios[1]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_medium_1));
+		return PTR_ERR(spcd_data->gpio_out_buzzer_medium_1);
+	}
+	spcd_data->gpio_out_buzzer_high_0 = devm_gpiod_get_index(dev, "out-buzzer-high", 0, GPIOD_OUT_HIGH_OPEN_DRAIN);
+	if (IS_ERR(spcd_data->gpio_out_buzzer_high_0)) {
+		dev_err(dev, "failed to get out-buzzer-high-gpios[0]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_high_0));
+		return PTR_ERR(spcd_data->gpio_out_buzzer_high_0);
+	}
+	spcd_data->gpio_out_buzzer_high_1 = devm_gpiod_get_index(dev, "out-buzzer-high", 1, GPIOD_OUT_HIGH_OPEN_DRAIN);
+	if (IS_ERR(spcd_data->gpio_out_buzzer_high_1)) {
+		dev_err(dev, "failed to get out-buzzer-high-gpios[1]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_high_1));
+		return PTR_ERR(spcd_data->gpio_out_buzzer_high_1);
+	}
+	spcd_data->gpio_out_buzzer_high_2 = devm_gpiod_get_index(dev, "out-buzzer-high", 2, GPIOD_OUT_HIGH_OPEN_DRAIN);
+	if (IS_ERR(spcd_data->gpio_out_buzzer_high_2)) {
+		dev_err(dev, "failed to get out-buzzer-high-gpios[2]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_high_2));
+		return PTR_ERR(spcd_data->gpio_out_buzzer_high_2);
+	}
+	spcd_data->gpio_out_blower_stat = devm_gpiod_get(dev, "out-blower-stat", GPIOD_OUT_LOW_OPEN_DRAIN);
+	if (IS_ERR(spcd_data->gpio_out_blower_stat)) {
+		dev_err(dev, "failed to get out-blower-stat-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_blower_stat));
+		return PTR_ERR(spcd_data->gpio_out_blower_stat);
+	}
+	spcd_data->gpio_out_1min = devm_gpiod_get(dev, "out-1min", GPIOD_OUT_LOW_OPEN_DRAIN);
+	if (IS_ERR(spcd_data->gpio_out_1min)) {
+		dev_err(dev, "failed to get out-1min-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_1min));
+		return PTR_ERR(spcd_data->gpio_out_1min);
+	}
+
+
 	// TODO: Initial GPIO state tracking vars.
+
+
+
+
+
+
+
+
+
 
 
 	platform_set_drvdata(pdev, spcd_data);
