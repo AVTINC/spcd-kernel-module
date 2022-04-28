@@ -133,8 +133,8 @@ static DEVICE_ATTR(blower_period, S_IRUGO | S_IWUSR, spcd_blower_show_period, sp
 
 
 static struct attribute *spcd_attrs[] = {
-	&dev_attr_blower_duty_cycle,
-	&dev_attr_blower_period,
+	&dev_attr_blower_duty_cycle.attr,
+	&dev_attr_blower_period.attr,
 
 	NULL
 };
