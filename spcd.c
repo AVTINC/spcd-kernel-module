@@ -245,13 +245,13 @@ static int spcd_probe(struct platform_device *pdev) {
 
 	spcd_data->gpio_out_blower_control = devm_gpiod_get(dev, "out-blower-control", GPIOD_OUT_LOW);
 	if (IS_ERR(spcd_data->gpio_out_blower_control)) {
-		dev_err(dev, "failed to get out-blower-control-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_blower_controll));
+		dev_err(dev, "failed to get out-blower-control-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_blower_control));
 		return PTR_ERR(spcd_data->gpio_out_blower_control);
 	}
 
 	spcd_data->gpio_out_valve_control = devm_gpiod_get(dev, "out-valve-control", GPIOD_OUT_LOW);
 	if (IS_ERR(spcd_data->gpio_out_valve_control)) {
-		dev_err(dev, "failed to get out-valve-control-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_valve_controll));
+		dev_err(dev, "failed to get out-valve-control-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_valve_control));
 		return PTR_ERR(spcd_data->gpio_out_valve_control);
 	}
 
