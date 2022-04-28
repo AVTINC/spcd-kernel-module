@@ -73,7 +73,7 @@ struct spcd_data {
 
 // Top half IRQ Handler.
 static irqreturn_t spcd_handle_irq(int irq, void *dev_id) {
-	struct spcd_data *spcd = dev_id;
+	// struct spcd_data *spcd = dev_id;
 
 	// TODO: Read spcd sate.
 	return IRQ_HANDLED;
