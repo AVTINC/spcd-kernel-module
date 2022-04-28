@@ -83,7 +83,7 @@ static irqreturn_t spcd_handle_irq(int irq, void *dev_id) {
 
 
 // Expose sysfs attributes
-static ssize_t spcd_blower_show_duty_cycle(struct device *dev, struct device_attributes *attr, char *buf) {
+static ssize_t spcd_blower_show_duty_cycle(struct device *dev, struct device_attribute *attr, char *buf) {
 	struct spcd_data *spcd = dev_get_drvdata(dev);
 	int len;
 
@@ -106,7 +106,7 @@ static ssize_t spcd_blower_store_duty_cycle(struct device *dev, struct device_at
 static DEVICE_ATTR(blower_duty_cycle, S_IRUGO | S_IWUSR, spcd_blower_show_duty_cycle, spcd_blower_store_duty_cycle);
 
 
-static ssize_t spcd_blower_show_period(struct device *dev, struct device_attributes *attr, char *buf) {
+static ssize_t spcd_blower_show_period(struct device *dev, struct device_attribute *attr, char *buf) {
 	struct spcd_data *spcd = dev_get_drvdata(dev);
 	int len;
 
