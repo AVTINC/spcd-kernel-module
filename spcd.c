@@ -32,7 +32,6 @@
 #include <linux/platform_device.h>
 #include <linux/module.h>
 #include <linux/poll.h>
-#include <linux/pwm.h>
 #include <linux/uaccess.h>
 
 struct spcd_data {
@@ -64,6 +63,11 @@ struct spcd_data {
 	struct gpio_desc	*gpio_out_buzzer_high_2;
 	struct gpio_desc	*gpio_out_blower_stat;
 	struct gpio_desc	*gpio_out_1min;
+	struct gpio_desc	*gpio_out_blower_control;
+	struct gpio_desc	*gpio_out_valve_control;
+
+	int			blower_duty_cycle;
+	int			blower_period;
 };
 
 
@@ -74,6 +78,76 @@ static irqreturn_t spcd_handle_irq(int irq, void *dev_id) {
 	// TODO: Read spcd sate.
 	return IRQ_HANDLED;
 };
+
+
+
+
+// Expose sysfs attributes
+static ssize_t spcd_blower_show_duty_cycle(struct device *dev, struct device_attributes *attr, char *buf) {
+	struct spcd_data *spcd = dev_get_drvdata(dev);
+	int len;
+
+	len = sprintf(buf, "%d\n", spcd->blower_duty_cycle);
+	if (len <= 0) {
+		dev_err(dev, "spcd: Invalid sprintf len: %d\n", len);
+	}
+	return len;
+}
+
+static ssize_t spcd_blower_store_duty_cycle(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+	struct spcd_data *spcd = dev_get_drvdata(dev);
+	int len;
+
+	kstrtoint(buf, 10, &spcd->blower_duty_cycle);
+	// TODO: set_state
+
+	return count;
+}
+
+static DEVICE_ATTR(blower_duty_cycle, S_IRUGO | S_IWUSR, spcd_blower_show_duty_cycle, spcd_blower_store_duty_cycle);
+
+
+static ssize_t spcd_blower_show_period(struct device *dev, struct device_attributes *attr, char *buf) {
+	struct spcd_data *spcd = dev_get_drvdata(dev);
+	int len;
+
+	len = sprintf(buf, "%d\n", spcd->blower_period);
+	if (len <= 0) {
+		dev_err(dev, "spcd: Invalid sprintf len: %d\n", len);
+	}
+	return len;
+}
+
+static ssize_t spcd_blower_store_period(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+	struct spcd_data *spcd = dev_get_drvdata(dev);
+	int len;
+
+	kstrtoint(buf, 10, &spcd->blower_period);
+	// TODO: set_state
+
+	return count;
+}
+
+static DEVICE_ATTR(blower_period, S_IRUGO | S_IWUSR, spcd_blower_show_period, spcd_blower_store_period);
+
+
+
+
+
+static struct attribute *spcd_attrs[] = {
+	&dev_attr_blower_duty_cycle,
+	&dev_attr_blower_period,
+
+	NULL
+};
+ATTRIBUTE_GROUPS(spcd);
+
+
+
+
+
+
+
 
 
 static int spcd_probe(struct platform_device *pdev) {
@@ -171,6 +245,19 @@ static int spcd_probe(struct platform_device *pdev) {
 		return PTR_ERR(spcd_data->gpio_out_wdt_alert);
 	}
 
+	spcd_data->gpio_out_blower_control = devm_gpiod_get(dev, "out-blower-control", GPIOD_OUT_LOW);
+	if (IS_ERR(spcd_data->gpio_out_blower_control)) {
+		dev_err(Dev, "failed to get out-blower-control-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_blower_controll));
+		return PTR_ERR(spcd_data->gpio_out_blower_control);
+	}
+
+	spcd_data->gpio_out_valve_control = devm_gpiod_get(dev, "out-valve-control", GPIOD_OUT_LOW);
+	if (IS_ERR(spcd_data->gpio_out_valve_control)) {
+		dev_err(Dev, "failed to get out-valve-control-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_valve_controll));
+		return PTR_ERR(spcd_data->gpio_out_valve_control);
+	}
+
+
 
 	// All outputs on the I2C expander are open-drain.
 	spcd_data->gpio_out_buzzer_low = devm_gpiod_get(dev, "out-buzzer-low", GPIOD_OUT_HIGH_OPEN_DRAIN);
@@ -214,15 +301,7 @@ static int spcd_probe(struct platform_device *pdev) {
 		return PTR_ERR(spcd_data->gpio_out_1min);
 	}
 
-
 	// TODO: Initial GPIO state tracking vars.
-
-
-
-
-
-
-
 
 
 
@@ -231,7 +310,14 @@ static int spcd_probe(struct platform_device *pdev) {
 
 	// TODO sync state with a set / read.
 
+
+
 	// Associate sysfs attribute groups.
+	ret = sysfs_create_group(&pdev->dev.kobj, &spcd_group);
+	if (ret) {
+		dev_err(dev, "sysfs creation failed\n");
+		return ret;
+	}
 
 	return ret;
 };
