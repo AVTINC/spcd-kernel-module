@@ -96,7 +96,6 @@ static ssize_t spcd_blower_show_duty_cycle(struct device *dev, struct device_att
 
 static ssize_t spcd_blower_store_duty_cycle(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
 	struct spcd_data *spcd = dev_get_drvdata(dev);
-	int len;
 
 	kstrtoint(buf, 10, &spcd->blower_duty_cycle);
 	// TODO: set_state
@@ -120,7 +119,6 @@ static ssize_t spcd_blower_show_period(struct device *dev, struct device_attribu
 
 static ssize_t spcd_blower_store_period(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
 	struct spcd_data *spcd = dev_get_drvdata(dev);
-	int len;
 
 	kstrtoint(buf, 10, &spcd->blower_period);
 	// TODO: set_state
