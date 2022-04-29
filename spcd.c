@@ -158,7 +158,7 @@ static ssize_t spcd_blower_show_duty_cycle(struct device *dev, struct device_att
 	struct spcd_data *spcd = dev_get_drvdata(dev);
 	int len;
 
-	len = sprintf(buf, "%lld\n", ktime_to_ns(spcd->blower_duty_on);
+	len = sprintf(buf, "%lld\n", ktime_to_ns(spcd->blower_duty_on));
 	if (len <= 0) {
 		dev_err(dev, "spcd: Invalid sprintf len: %d\n", len);
 	}
