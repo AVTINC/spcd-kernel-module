@@ -68,10 +68,10 @@ struct spcd_data {
 	struct gpio_desc	*gpio_out_valve_control;
 
 	ktime_t blower_period;
-	uint8	blower_duty;
+	u8	blower_duty;
 	ktime_t blower_duty_on;
 	ktime_t blower_duty_off;
-	uint8    blower_duty_state;
+	u8    blower_duty_state;
 
 	struct hrtimer blower_timer;
 };
