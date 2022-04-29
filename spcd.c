@@ -33,6 +33,7 @@
 #include <linux/module.h>
 #include <linux/poll.h>
 #include <linux/uaccess.h>
+#include <linux/hrtimer.h>
 
 struct spcd_data {
 	struct device		*dev;
@@ -66,8 +67,27 @@ struct spcd_data {
 	struct gpio_desc	*gpio_out_blower_control;
 	struct gpio_desc	*gpio_out_valve_control;
 
-	int			blower_duty_cycle;
-	int			blower_period;
+	ktime_t blower_period;
+	uint8	blower_duty;
+	ktime_t blower_duty_on;
+	ktime_t blower_duty_off;
+	uint8    blower_duty_state;
+
+	struct hrtimer blower_timer;
+};
+
+enum hrtimer_restart blower_timer_callback(struct hrtimer *timer) {
+	struct spcd_data *spcd = container_of(timer, struct spcd_data, blower_timer);
+
+	// Swap from on to off.
+	spcd->blower_duty_state = spcd->blower_duty_state ^ 1;
+	gpiod_set_value(spcd->gpio_out_blower_control, spcd->blower_duty_state);
+
+	// If the pins are off, wait for the time they should be off.
+	// If the pins are on, wait for the time they should be on.
+	hrtimer_forward_now(&spcd->blower_timer, spcd->blower_duty_state == 0 ? spcd->blower_duty_off : spcd->blower_duty_on);
+
+	return HRTIMER_RESTART;
 };
 
 
@@ -80,6 +100,43 @@ static irqreturn_t spcd_handle_irq(int irq, void *dev_id) {
 };
 
 
+static void spcd_timer_update(struct spcd_data *spcd) {
+	// Clear any pending timers.
+	hrtimer_try_to_cancel(&spcd_data->blower_timer);
+
+	// Set the pins low. (blower OFF)
+	gpiod_set_value(spcd->gpio_out_blower_control, 0);
+	gpiod_set_value(spcd->gpio_out_blower_stat, 0);
+
+	// Recalculate the blower duty.
+	if (spcd->blower_period > 0 && spcd->blower_duty > 0) {
+		spcd->blower_duty_on = ktime_set(0, (spcd->blower_duty / 100) * ktime_to_ns(spcd->blower_period));
+		spcd->blower_duty_off = ktime_set(0, ktime_sub(spcd->blower_period, spcd->blower_duty_on));
+
+		// Set the pin states.
+		// We're going to turn the blower on.
+		gpiod_set_value(spcd->gpio_out_blower_stat, 1);
+
+		// We're going to pulse this pin.
+		spcd->blower_duty_state = 1;
+		gpiod_set_value(spcd->gpio_out_blower_control, spcd->blower_duty_state);
+
+		// If the duty is 100, blower_duty_off will be 0, and we don't need the timer.
+		if (ktime_to_ns(spcd->blower_duty_off) > 0) {
+			// Set a timer for the duty to be on.
+			hrtimer_forward_now(&spcd->blower_timer, spcd->blower_duty_on);
+			// fire the timer.
+			hrtimer_restart(&spcd->blower_timer);
+		}
+	} else {
+		spcd->blower_duty_on = ktime_set(0, 0);
+		spcd->blower_duty_off = ktime_set(0, 0);
+	}
+
+	return;
+};
+
+
 
 
 // Expose sysfs attributes
@@ -87,7 +144,7 @@ static ssize_t spcd_blower_show_duty_cycle(struct device *dev, struct device_att
 	struct spcd_data *spcd = dev_get_drvdata(dev);
 	int len;
 
-	len = sprintf(buf, "%d\n", spcd->blower_duty_cycle);
+	len = sprintf(buf, "%d\n", spcd->blower_duty);
 	if (len <= 0) {
 		dev_err(dev, "spcd: Invalid sprintf len: %d\n", len);
 	}
@@ -97,8 +154,9 @@ static ssize_t spcd_blower_show_duty_cycle(struct device *dev, struct device_att
 static ssize_t spcd_blower_store_duty_cycle(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
 	struct spcd_data *spcd = dev_get_drvdata(dev);
 
-	kstrtoint(buf, 10, &spcd->blower_duty_cycle);
-	// TODO: set_state
+	kstrtou8(buf, 10, &spcd->blower_duty);
+
+	spcd_timer_update(spcd);
 
 	return count;
 }
@@ -110,7 +168,7 @@ static ssize_t spcd_blower_show_period(struct device *dev, struct device_attribu
 	struct spcd_data *spcd = dev_get_drvdata(dev);
 	int len;
 
-	len = sprintf(buf, "%d\n", spcd->blower_period);
+	len = sprintf(buf, "%ld\n", spcd->blower_period);
 	if (len <= 0) {
 		dev_err(dev, "spcd: Invalid sprintf len: %d\n", len);
 	}
@@ -119,9 +177,12 @@ static ssize_t spcd_blower_show_period(struct device *dev, struct device_attribu
 
 static ssize_t spcd_blower_store_period(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
 	struct spcd_data *spcd = dev_get_drvdata(dev);
+	long periodnanos
 
-	kstrtoint(buf, 10, &spcd->blower_period);
-	// TODO: set_state
+	kstrtol(buf, 10, &periodnanos);
+	spcd->blower_period = ktime_set(0, periodnanos);
+
+	spcd_timer_update(spcd);
 
 	return count;
 }
@@ -299,15 +360,21 @@ static int spcd_probe(struct platform_device *pdev) {
 		return PTR_ERR(spcd_data->gpio_out_1min);
 	}
 
+	spcd_data->blower_duty = 0;
+	spcd_data->blower_period = ktime_set(0, 0);
+
 	// TODO: Initial GPIO state tracking vars.
-
-
 
 
 	platform_set_drvdata(pdev, spcd_data);
 
-	// TODO sync state with a set / read.
+	// Setup softPWM hardware timers.
+	hrtimer_init( &spcd_data->blower_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED_HARD);
+	spcd_data->blower_timer.function = blower_timer_callback;
+	spcd_timer_update(spcd_data);
 
+
+	// TODO sync state with a set / read.
 
 
 	// Associate sysfs attribute groups.
