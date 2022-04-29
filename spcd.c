@@ -168,7 +168,7 @@ static ssize_t spcd_blower_show_period(struct device *dev, struct device_attribu
 	struct spcd_data *spcd = dev_get_drvdata(dev);
 	int len;
 
-	len = sprintf(buf, "%ld\n", spcd->blower_period);
+	len = sprintf(buf, "%ld\n", ktime_to_ns(spcd->blower_period));
 	if (len <= 0) {
 		dev_err(dev, "spcd: Invalid sprintf len: %d\n", len);
 	}
