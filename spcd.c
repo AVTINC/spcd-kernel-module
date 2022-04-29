@@ -177,7 +177,7 @@ static ssize_t spcd_blower_show_period(struct device *dev, struct device_attribu
 
 static ssize_t spcd_blower_store_period(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
 	struct spcd_data *spcd = dev_get_drvdata(dev);
-	long periodnanos
+	long periodnanos;
 
 	kstrtol(buf, 10, &periodnanos);
 	spcd->blower_period = ktime_set(0, periodnanos);
