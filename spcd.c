@@ -376,8 +376,9 @@ static int spcd_probe(struct platform_device *pdev) {
 		return PTR_ERR(spcd_data->gpio_out_1min);
 	}
 
-	spcd_data->blower_duty = 0;
 	spcd_data->blower_period = ktime_set(0, 0);
+	spcd_data->blower_duty_on = ktime_set(0, 0);
+	spcd_data->blower_duty_off = ktime_set(0, 0);
 	spcd_data->blower_duty_state = 0;
 
 	// TODO: Initial GPIO state tracking vars.
