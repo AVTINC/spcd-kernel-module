@@ -68,7 +68,6 @@ struct spcd_data {
 	struct gpio_desc	*gpio_out_valve_control;
 
 	ktime_t blower_period;
-	u8	blower_duty;
 	ktime_t blower_duty_on;
 	ktime_t blower_duty_off;
 	u8    blower_duty_state;
@@ -115,12 +114,10 @@ static void spcd_timer_update(struct spcd_data *spcd) {
 	pr_alert(" blower off.\n");
 
 	// Recalculate the blower duty.
-	if (spcd->blower_period > 0 && spcd->blower_duty > 0) {
+	if (spcd->blower_period > 0 && spcd->blower_duty_on > 0) {
 		pr_alert("   period and duty set.\n");
 
-		spcd->blower_duty_on = ktime_set(0, ktime_to_ns(spcd->blower_period) / 100 * spcd->blower_duty);
 		spcd->blower_duty_off = ktime_set(0, ktime_sub(spcd->blower_period, spcd->blower_duty_on));
-
 
 		pr_alert("  on:%lld    off:%lld\n", ktime_to_ns(spcd->blower_duty_on), ktime_to_ns(spcd->blower_duty_off));
 
@@ -161,7 +158,7 @@ static ssize_t spcd_blower_show_duty_cycle(struct device *dev, struct device_att
 	struct spcd_data *spcd = dev_get_drvdata(dev);
 	int len;
 
-	len = sprintf(buf, "%d\n", spcd->blower_duty);
+	len = sprintf(buf, "%lld\n", ktime_to_ns(spcd->blower_duty_on);
 	if (len <= 0) {
 		dev_err(dev, "spcd: Invalid sprintf len: %d\n", len);
 	}
@@ -170,8 +167,10 @@ static ssize_t spcd_blower_show_duty_cycle(struct device *dev, struct device_att
 
 static ssize_t spcd_blower_store_duty_cycle(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
 	struct spcd_data *spcd = dev_get_drvdata(dev);
+	long dutyonnanos;
 
-	kstrtou8(buf, 10, &spcd->blower_duty);
+	kstrtol(buf, 10, &dutyonnanos);
+	spcd->blower_duty_on = ktime_set(0, dutyonnanos);
 
 	spcd_timer_update(spcd);
 
