@@ -102,7 +102,7 @@ static irqreturn_t spcd_handle_irq(int irq, void *dev_id) {
 
 static void spcd_timer_update(struct spcd_data *spcd) {
 	// Clear any pending timers.
-	hrtimer_try_to_cancel(&spcd_data->blower_timer);
+	hrtimer_try_to_cancel(&spcd->blower_timer);
 
 	// Set the pins low. (blower OFF)
 	gpiod_set_value(spcd->gpio_out_blower_control, 0);
