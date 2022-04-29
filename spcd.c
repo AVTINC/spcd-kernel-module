@@ -118,7 +118,7 @@ static void spcd_timer_update(struct spcd_data *spcd) {
 	if (spcd->blower_period > 0 && spcd->blower_duty > 0) {
 		pr_alert("   period and duty set.\n");
 
-		spcd->blower_duty_on = ktime_set(0, (ktime_to_ns(spcd->blower_period * spcd->blower_duty) / 100);
+		spcd->blower_duty_on = ktime_set(0, (ktime_to_ns(spcd->blower_period) * spcd->blower_duty) / 100);
 		spcd->blower_duty_off = ktime_set(0, ktime_sub(spcd->blower_period, spcd->blower_duty_on));
 
 		pr_alert("  on:%lld    off:%lld\n", ktime_to_ns(spcd->blower_duty_on), ktime_to_ns(spcd->blower_duty_off));
