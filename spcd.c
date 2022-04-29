@@ -101,34 +101,49 @@ static irqreturn_t spcd_handle_irq(int irq, void *dev_id) {
 
 
 static void spcd_timer_update(struct spcd_data *spcd) {
+	pr_alert(" %s\n", __FUNCTION__);
+
 	// Clear any pending timers.
 	hrtimer_try_to_cancel(&spcd->blower_timer);
 
 	// Set the pins low. (blower OFF)
+	pr_alert("  setting blower_control 0\n");
 	gpiod_set_value(spcd->gpio_out_blower_control, 0);
+	pr_alert("  setting blower_stat 0\n");
 	gpiod_set_value(spcd->gpio_out_blower_stat, 0);
+
+	pr_alert(" blower off.\n");
 
 	// Recalculate the blower duty.
 	if (spcd->blower_period > 0 && spcd->blower_duty > 0) {
+		pr_alert("   period and duty set.\n");
 		spcd->blower_duty_on = ktime_set(0, (spcd->blower_duty / 100) * ktime_to_ns(spcd->blower_period));
 		spcd->blower_duty_off = ktime_set(0, ktime_sub(spcd->blower_period, spcd->blower_duty_on));
+
+		pr_alert("  on:%lld    off:%lld\n", ktime_to_ns(spcd->blower_duty_on), ktime_to_ns(spcd->blower_duty_off));
 
 		// Set the pin states.
 		// We're going to turn the blower on.
 		gpiod_set_value(spcd->gpio_out_blower_stat, 1);
+		pr_alert("  blower_stat on.\n");
 
 		// We're going to pulse this pin.
 		spcd->blower_duty_state = 1;
 		gpiod_set_value(spcd->gpio_out_blower_control, spcd->blower_duty_state);
+		pr_alert("  blower_control on.\n");
 
 		// If the duty is 100, blower_duty_off will be 0, and we don't need the timer.
 		if (ktime_to_ns(spcd->blower_duty_off) > 0) {
+			pr_alert("  ENABLING BLOWER PWM TIMER\n");
 			// Set a timer for the duty to be on.
 			hrtimer_forward_now(&spcd->blower_timer, spcd->blower_duty_on);
 			// fire the timer.
 			hrtimer_restart(&spcd->blower_timer);
+		} else {
+			pr_alert(" FULL DUTY. NO TIMER\n");
 		}
 	} else {
+		pr_alert("   period or duty zero. Leaving off.\n");
 		spcd->blower_duty_on = ktime_set(0, 0);
 		spcd->blower_duty_off = ktime_set(0, 0);
 	}
@@ -362,6 +377,7 @@ static int spcd_probe(struct platform_device *pdev) {
 
 	spcd_data->blower_duty = 0;
 	spcd_data->blower_period = ktime_set(0, 0);
+	spcd_data->blower_duty_state = 0;
 
 	// TODO: Initial GPIO state tracking vars.
 
