@@ -67,14 +67,23 @@ struct spcd_data {
 	struct gpio_desc	*gpio_out_blower_control;
 	struct gpio_desc	*gpio_out_valve_control;
 
-	ktime_t blower_period;
-	ktime_t blower_duty_on;
-	ktime_t blower_duty_off;
-	u8    blower_duty_state;
 
-	struct hrtimer blower_timer;
+	ktime_t 		blower_period;
+	ktime_t 		blower_duty_on;
+	ktime_t 		blower_duty_off;
+	u8    			blower_duty_state;
+	struct hrtimer 		blower_timer;
+
+
+	ktime_t 		valve_period;
+	ktime_t 		valve_duty_on;
+	ktime_t 		value_duty_off;
+	u8    			valve_duty_state;
+	struct hrtimer		valve_timer;
 };
 
+
+// Blower PWM Callback
 enum hrtimer_restart blower_timer_callback(struct hrtimer *timer) {
 	struct spcd_data *spcd = container_of(timer, struct spcd_data, blower_timer);
 
@@ -87,7 +96,20 @@ enum hrtimer_restart blower_timer_callback(struct hrtimer *timer) {
 	hrtimer_forward_now(&spcd->blower_timer, spcd->blower_duty_state == 0 ? spcd->blower_duty_off : spcd->blower_duty_on);
 
 	return HRTIMER_RESTART;
-};
+}
+
+
+// Valve PWM Callback
+enum hrtimer_restart valve_timer_callback(struct hrtimer *timer) {
+	struct spcd_data *spcd = container_of(timer, struct spcd_data, valve_timer);
+
+	spcd->valve_duty_state = spcd->valve_duty_state ^ 1;
+	gpiod_set_value(spcd->gpio_out_valve_control, spcd->valve_duty_state);
+
+	hrtimer_forward_now(&spcd->valve_timer, spcd->valve_duty_state == 0 ? spcd->valve_duty_off : spcd->valve_duty_on);
+
+	return HRTIMER_RESTART;
+}
 
 
 // Top half IRQ Handler.
@@ -96,22 +118,18 @@ static irqreturn_t spcd_handle_irq(int irq, void *dev_id) {
 
 	// TODO: Read spcd sate.
 	return IRQ_HANDLED;
-};
+}
 
 
-static void spcd_timer_update(struct spcd_data *spcd) {
+static void spcd_blower_timer_update(struct spcd_data *spcd) {
 	pr_alert(" %s\n", __FUNCTION__);
 
 	// Clear any pending timers.
 	hrtimer_try_to_cancel(&spcd->blower_timer);
 
 	// Set the pins low. (blower OFF)
-	pr_alert("  setting blower_control 0\n");
 	gpiod_set_value(spcd->gpio_out_blower_control, 0);
-	pr_alert("  setting blower_stat 0\n");
 	gpiod_set_value(spcd->gpio_out_blower_stat, 0);
-
-	pr_alert(" blower off.\n");
 
 	// Recalculate the blower duty.
 	if (spcd->blower_period > 0 && spcd->blower_duty_on > 0) {
@@ -148,8 +166,54 @@ static void spcd_timer_update(struct spcd_data *spcd) {
 	}
 
 	return;
-};
+}
 
+
+static void spcd_valve_timer_update(struct spcd_data *spcd) {
+        pr_alert(" %s\n", __FUNCTION__);
+
+        // Clear any pending timers.
+        hrtimer_try_to_cancel(&spcd->valve_timer);
+
+        // Set the pins low. (blower OFF)
+        gpiod_set_value(spcd->gpio_out_valve_control, 0);
+
+        // Recalculate the blower duty.
+        if (spcd->valve_period > 0 && spcd->valve_duty_on > 0) {
+                pr_alert("   valve period and duty set.\n");
+
+                spcd->blower_duty_off = ktime_set(0, ktime_sub(spcd->valve_period, spcd->valve_duty_on));
+
+                pr_alert("  on:%lld    off:%lld\n", ktime_to_ns(spcd->valve_duty_on), ktime_to_ns(spcd->valve_duty_off));
+
+                // Set the pin states.
+                // We're going to turn the blower on.
+                gpiod_set_value(spcd->gpio_out_valve_stat, 1);
+                pr_alert("  valve_stat on.\n");
+
+                // We're going to pulse this pin.
+                spcd->blower_duty_state = 1;
+                gpiod_set_value(spcd->gpio_out_valve_control, spcd->blower_duty_state);
+                pr_alert("  valve_control on.\n");
+
+                // If the duty is 100, blower_duty_off will be 0, and we don't need the timer.
+                if (ktime_to_ns(spcd->valve_duty_off) > 0) {
+                        pr_alert("  ENABLING VALVE PWM TIMER\n");
+                        // Set a timer for the duty to be on.
+                        hrtimer_forward_now(&spcd->valve_timer, spcd->valve_duty_on);
+                        // fire the timer.
+                        hrtimer_restart(&spcd->valve_timer);
+                } else {
+                        pr_alert(" FULL DUTY. NO TIMER\n");
+                }
+        } else {
+                pr_alert("   period or duty zero. Leaving off.\n");
+                spcd->valve_duty_on = ktime_set(0, 0);
+                spcd->valve_duty_off = ktime_set(0, 0);
+        }
+
+        return;
+}
 
 
 
@@ -172,7 +236,7 @@ static ssize_t spcd_blower_store_duty_cycle(struct device *dev, struct device_at
 	kstrtol(buf, 10, &dutyonnanos);
 	spcd->blower_duty_on = ktime_set(0, dutyonnanos);
 
-	spcd_timer_update(spcd);
+	spcd_blower_timer_update(spcd);
 
 	return count;
 }
@@ -198,7 +262,7 @@ static ssize_t spcd_blower_store_period(struct device *dev, struct device_attrib
 	kstrtol(buf, 10, &periodnanos);
 	spcd->blower_period = ktime_set(0, periodnanos);
 
-	spcd_timer_update(spcd);
+	spcd_blower_timer_update(spcd);
 
 	return count;
 }
@@ -206,22 +270,67 @@ static ssize_t spcd_blower_store_period(struct device *dev, struct device_attrib
 static DEVICE_ATTR(blower_period, S_IRUGO | S_IWUSR, spcd_blower_show_period, spcd_blower_store_period);
 
 
+static ssize_t spcd_valve_show_duty_cycle(struct device *dev, struct device_attribute *attr, char *buf) {
+	struct spcd_data *spcd = dev_get_drvdata(dev);
+	int len;
+
+	len = sprintf(buf, "%lld\n", ktime_to_ns(spcd->valve_duty_on));
+	if (len <= 0) {
+		dev_err(Dev, "spcd: Invalid sprintf len: %d\n", len);
+	}
+	return len;
+}
+
+static ssize_t spcd_valve_store_duty_cycle(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+	struct spcd_data *spcd = dev_get_drvdata(dev);
+	long dutynanos;
+
+	kstrtol(buf, 10, &dutynanos);
+	spcd->blower_duty_on = ktime_set(0, dutyonnanos);
+
+	spcd_valve_timer_update(spcd);
+
+	return count;
+}
+
+static DEVICE_ATTR(valve_duty_cycle, S_IRUGO | S_IWUSR, spcd_valve_show_duty_cycle, spcd_valve_store_duty_cycle);
+
+static ssize_t spcd_valve_show_period(struct device *dev, struct device_attribute *attr, char *buf) {
+	struct spcd_data *spcd = dev_get_drvdata(dev);
+	int len;
+
+	len = sprintf(buf, "%lld\n", ktime_to_ns(spcd->valve_period));
+	if (len <= 0) {
+		dev_err(dev, "spcd: Invalid sprintf len: %d\n", len);
+	}
+	return len;
+}
+
+static ssize_t spcd_valve_store_period(struct device *dev, struct device_attribute *attr, char *buf) {
+	struct spcd_data *spcd = dev_get_drvdata(dev);
+	long periodnanos;
+
+	kstrtol(buf, 10, &periodnanos);
+	spcd->valve_period = ktime_set(0, periodnanos);
+
+	spcd_valve_timer_update(spcd);
+
+	return count;
+}
+
+static DEVICE_ATTR(valve_period, S_IRUGO | S_IWUSR, spcd_valve_show_period, spcd_valve_store_period);
 
 
 
 static struct attribute *spcd_attrs[] = {
 	&dev_attr_blower_duty_cycle.attr,
 	&dev_attr_blower_period.attr,
+	&dev_attr_valve_duty_cycle.attr,
+	&dev_attr_valve_period.attr,
 
 	NULL
 };
 ATTRIBUTE_GROUPS(spcd);
-
-
-
-
-
-
 
 
 
@@ -381,18 +490,26 @@ static int spcd_probe(struct platform_device *pdev) {
 	spcd_data->blower_duty_off = ktime_set(0, 0);
 	spcd_data->blower_duty_state = 0;
 
+	spcd_data->valve_period = ktime_set(0, 0);
+	spcd_data->valve_duty_on = ktime_set(0, 0);
+	spcd_data->valve_duty_off = ktime_set(0, 0);
+	spcd_data->valve_duty_state = 0;
+
 	// TODO: Initial GPIO state tracking vars.
-
-
-	platform_set_drvdata(pdev, spcd_data);
 
 	// Setup softPWM hardware timers.
 	hrtimer_init( &spcd_data->blower_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED_HARD);
 	spcd_data->blower_timer.function = blower_timer_callback;
-	spcd_timer_update(spcd_data);
 
+	hrtimer_init( &spcd_data->valve_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED_HARD);
+	spcd_data->valve_timer.function = valve_timer_callback;
+
+
+	platform_set_drvdata(pdev, spcd_data);
 
 	// TODO sync state with a set / read.
+	spcd_blower_timer_update(spcd_data);
+	spcd_valve_timer_update(spcd_data);
 
 
 	// Associate sysfs attribute groups.
@@ -403,7 +520,7 @@ static int spcd_probe(struct platform_device *pdev) {
 	}
 
 	return ret;
-};
+}
 
 static int spcd_remove(struct platform_device *pdev) {
 	struct spcd_data *spcd_data = platform_get_drvdata(pdev);
@@ -413,7 +530,7 @@ static int spcd_remove(struct platform_device *pdev) {
 	kfree(spcd_data);
 
 	return 0;
-};
+}
 
 
 static const struct of_device_id of_spcd_match[] = {
