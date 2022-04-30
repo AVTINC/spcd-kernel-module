@@ -282,7 +282,7 @@ static ssize_t spcd_valve_store_duty_cycle(struct device *dev, struct device_att
 	long dutynanos;
 
 	kstrtol(buf, 10, &dutynanos);
-	spcd->blower_duty_on = ktime_set(0, dutynanos);
+	spcd->valve_duty_on = ktime_set(0, dutynanos);
 
 	spcd_valve_timer_update(spcd);
 
