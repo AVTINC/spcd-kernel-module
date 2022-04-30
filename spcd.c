@@ -175,28 +175,24 @@ static void spcd_valve_timer_update(struct spcd_data *spcd) {
         // Clear any pending timers.
         hrtimer_try_to_cancel(&spcd->valve_timer);
 
-        // Set the pins low. (blower OFF)
+        // Set the pins low. (valve OFF)
         gpiod_set_value(spcd->gpio_out_valve_control, 0);
 
-        // Recalculate the blower duty.
+        // Recalculate the valve duty.
         if (spcd->valve_period > 0 && spcd->valve_duty_on > 0) {
                 pr_alert("   valve period and duty set.\n");
 
-                spcd->blower_duty_off = ktime_set(0, ktime_sub(spcd->valve_period, spcd->valve_duty_on));
+                spcd->valve_duty_off = ktime_set(0, ktime_sub(spcd->valve_period, spcd->valve_duty_on));
 
                 pr_alert("  on:%lld    off:%lld\n", ktime_to_ns(spcd->valve_duty_on), ktime_to_ns(spcd->valve_duty_off));
 
                 // Set the pin states.
-                // We're going to turn the blower on.
-                gpiod_set_value(spcd->gpio_out_valve_stat, 1);
-                pr_alert("  valve_stat on.\n");
-
                 // We're going to pulse this pin.
-                spcd->blower_duty_state = 1;
-                gpiod_set_value(spcd->gpio_out_valve_control, spcd->blower_duty_state);
+                spcd->valve_duty_state = 1;
+                gpiod_set_value(spcd->gpio_out_valve_control, spcd->valve_duty_state);
                 pr_alert("  valve_control on.\n");
 
-                // If the duty is 100, blower_duty_off will be 0, and we don't need the timer.
+                // If the duty is 100, valve_duty_off will be 0, and we don't need the timer.
                 if (ktime_to_ns(spcd->valve_duty_off) > 0) {
                         pr_alert("  ENABLING VALVE PWM TIMER\n");
                         // Set a timer for the duty to be on.
