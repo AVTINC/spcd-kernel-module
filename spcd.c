@@ -302,7 +302,7 @@ static ssize_t spcd_valve_show_period(struct device *dev, struct device_attribut
 	return len;
 }
 
-static ssize_t spcd_valve_store_period(struct device *dev, struct device_attribute *attr, char *buf, size_t count) {
+static ssize_t spcd_valve_store_period(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
 	struct spcd_data *spcd = dev_get_drvdata(dev);
 	long periodnanos;
 
