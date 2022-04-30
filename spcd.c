@@ -77,7 +77,7 @@ struct spcd_data {
 
 	ktime_t 		valve_period;
 	ktime_t 		valve_duty_on;
-	ktime_t 		value_duty_off;
+	ktime_t 		valve_duty_off;
 	u8    			valve_duty_state;
 	struct hrtimer		valve_timer;
 };
