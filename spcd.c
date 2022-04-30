@@ -272,7 +272,7 @@ static ssize_t spcd_valve_show_duty_cycle(struct device *dev, struct device_attr
 
 	len = sprintf(buf, "%lld\n", ktime_to_ns(spcd->valve_duty_on));
 	if (len <= 0) {
-		dev_err(Dev, "spcd: Invalid sprintf len: %d\n", len);
+		dev_err(dev, "spcd: Invalid sprintf len: %d\n", len);
 	}
 	return len;
 }
