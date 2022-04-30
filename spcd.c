@@ -282,7 +282,7 @@ static ssize_t spcd_valve_store_duty_cycle(struct device *dev, struct device_att
 	long dutynanos;
 
 	kstrtol(buf, 10, &dutynanos);
-	spcd->blower_duty_on = ktime_set(0, dutyonnanos);
+	spcd->blower_duty_on = ktime_set(0, dutynanos);
 
 	spcd_valve_timer_update(spcd);
 
@@ -302,7 +302,7 @@ static ssize_t spcd_valve_show_period(struct device *dev, struct device_attribut
 	return len;
 }
 
-static ssize_t spcd_valve_store_period(struct device *dev, struct device_attribute *attr, char *buf) {
+static ssize_t spcd_valve_store_period(struct device *dev, struct device_attribute *attr, char *buf, size_t count) {
 	struct spcd_data *spcd = dev_get_drvdata(dev);
 	long periodnanos;
 
