@@ -440,32 +440,32 @@ static int spcd_probe(struct platform_device *pdev) {
 
 
 	// All outputs on the I2C expander are open-drain.
-	spcd_data->gpio_out_buzzer_low = devm_gpiod_get(dev, "out-buzzer-low", GPIOD_OUT_HIGH_OPEN_DRAIN);
+	spcd_data->gpio_out_buzzer_low = devm_gpiod_get(dev, "out-buzzer-low", GPIOD_OUT_LOW_OPEN_DRAIN);
 	if (IS_ERR(spcd_data->gpio_out_buzzer_low)) {
 		dev_err(dev, "failed to get out-buzzer-low-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_low));
 		return PTR_ERR(spcd_data->gpio_out_buzzer_low);
 	}
-	spcd_data->gpio_out_buzzer_medium_0 = devm_gpiod_get_index(dev, "out-buzzer-medium", 0, GPIOD_OUT_HIGH_OPEN_DRAIN);
+	spcd_data->gpio_out_buzzer_medium_0 = devm_gpiod_get_index(dev, "out-buzzer-medium", 0, GPIOD_OUT_LOW_OPEN_DRAIN);
 	if (IS_ERR(spcd_data->gpio_out_buzzer_medium_0)) {
 		dev_err(dev, "failed to get out-buzzer-medium-gpios[0]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_medium_0));
 		return PTR_ERR(spcd_data->gpio_out_buzzer_medium_0);
 	}
-	spcd_data->gpio_out_buzzer_medium_1 = devm_gpiod_get_index(dev, "out-buzzer-medium", 1, GPIOD_OUT_HIGH_OPEN_DRAIN);
+	spcd_data->gpio_out_buzzer_medium_1 = devm_gpiod_get_index(dev, "out-buzzer-medium", 1, GPIOD_OUT_LOW_OPEN_DRAIN);
 	if (IS_ERR(spcd_data->gpio_out_buzzer_medium_1)) {
 		dev_err(dev, "failed to get out-buzzer-medium-gpios[1]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_medium_1));
 		return PTR_ERR(spcd_data->gpio_out_buzzer_medium_1);
 	}
-	spcd_data->gpio_out_buzzer_high_0 = devm_gpiod_get_index(dev, "out-buzzer-high", 0, GPIOD_OUT_HIGH_OPEN_DRAIN);
+	spcd_data->gpio_out_buzzer_high_0 = devm_gpiod_get_index(dev, "out-buzzer-high", 0, GPIOD_OUT_LOW_OPEN_DRAIN);
 	if (IS_ERR(spcd_data->gpio_out_buzzer_high_0)) {
 		dev_err(dev, "failed to get out-buzzer-high-gpios[0]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_high_0));
 		return PTR_ERR(spcd_data->gpio_out_buzzer_high_0);
 	}
-	spcd_data->gpio_out_buzzer_high_1 = devm_gpiod_get_index(dev, "out-buzzer-high", 1, GPIOD_OUT_HIGH_OPEN_DRAIN);
+	spcd_data->gpio_out_buzzer_high_1 = devm_gpiod_get_index(dev, "out-buzzer-high", 1, GPIOD_OUT_LOW_OPEN_DRAIN);
 	if (IS_ERR(spcd_data->gpio_out_buzzer_high_1)) {
 		dev_err(dev, "failed to get out-buzzer-high-gpios[1]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_high_1));
 		return PTR_ERR(spcd_data->gpio_out_buzzer_high_1);
 	}
-	spcd_data->gpio_out_buzzer_high_2 = devm_gpiod_get_index(dev, "out-buzzer-high", 2, GPIOD_OUT_HIGH_OPEN_DRAIN);
+	spcd_data->gpio_out_buzzer_high_2 = devm_gpiod_get_index(dev, "out-buzzer-high", 2, GPIOD_OUT_LOW_OPEN_DRAIN);
 	if (IS_ERR(spcd_data->gpio_out_buzzer_high_2)) {
 		dev_err(dev, "failed to get out-buzzer-high-gpios[2]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_high_2));
 		return PTR_ERR(spcd_data->gpio_out_buzzer_high_2);
