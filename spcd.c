@@ -87,6 +87,9 @@ struct spcd_data {
 };
 
 
+// Shamelessly cribbed from newer kernel versions (5.17.5)
+// Having this here, greatly reduces our repetition.
+// https://elixir.bootlin.com/linux/v5.17.5/C/ident/sysfs_emit
 int sysfs_emit(char *buf, const char *fmt, ...)
 {
     va_list args;
