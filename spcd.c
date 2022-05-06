@@ -34,6 +34,10 @@
 #include <linux/poll.h>
 #include <linux/uaccess.h>
 #include <linux/hrtimer.h>
+// Added to support sysfs_emit, being pulled in from newer kernel releases.
+#include <linux/mm.h>
+#include <linux/bug.h>
+#include <linux/slab.h>
 
 struct spcd_data {
     struct device *dev;
@@ -81,6 +85,24 @@ struct spcd_data {
     u8 valve_duty_state;
     struct hrtimer valve_timer;
 };
+
+
+int sysfs_emit(char *buf, const char *fmt, ...)
+{
+    va_list args;
+    int len;
+
+    if (WARN(!buf || offset_in_page(buf),
+             "invalid sysfs_emit: buf:%p\n", buf))
+        return 0;
+
+    va_start(args, fmt);
+    len = vscnprintf(buf, PAGE_SIZE, fmt, args);
+    va_end(args);
+
+    return len;
+}
+
 
 
 // Blower PWM Callback
