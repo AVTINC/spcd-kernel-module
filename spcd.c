@@ -136,15 +136,6 @@ enum hrtimer_restart valve_timer_callback(struct hrtimer *timer) {
 }
 
 
-// Top half IRQ Handler.
-static irqreturn_t spcd_handle_irq(int irq, void *dev_id) {
-    // struct spcd_data *spcd = dev_id;
-
-    // TODO: Read spcd sate.
-    return IRQ_HANDLED;
-}
-
-
 static void spcd_blower_timer_update(struct spcd_data *spcd) {
     pr_alert(" %s\n", __FUNCTION__);
 
@@ -427,6 +418,51 @@ static struct attribute *spcd_attrs[] = {
 ATTRIBUTE_GROUPS(spcd);
 
 
+/* -- Interrupt Handlers -- */
+/*
+ * All interrupt handlers are treated as bottom half threaded interrupts.
+ * This is due to the use of the max7313 i2C GPIO expander, which allows
+ * gpio lines (reads / writes) to 'sleep'. Since these are not memory-mapped
+ * output lines, it takes some overhead for the i2c communications.
+ *
+ * Moving to bottom-half IRQs shouldn't greatly impact things.
+ */
+static irqreturn_t spcd_handle_12v_status_irq(int irq, void *dev_id) {
+    // struct spcd_data *spcd = dev_id;
+    pr_alert(" %s\n", __FUNCTION__);
+    return IRQ_HANDLED;
+}
+
+static irqreturn_t spcd_handle_valve_irq(int irq, void *dev_id) {
+    // struct spcd_data *spcd = dev_id;
+    pr_alert(" %s\n", __FUNCTION__);
+    return IRQ_HANDLED;
+}
+
+static irqreturn_t spcd_handle_overpressure_irq(int irq, void *dev_id) {
+    // struct spcd_data *spcd = dev_id;
+    pr_alert(" %s\n", __FUNCTION__);
+    return IRQ_HANDLED;
+}
+
+static irqreturn_t spcd_handle_stuckon_irq(int irq, void *dev_id) {
+    // struct spcd_data *spcd = dev_id;
+    pr_alert(" %s\n", __FUNCTION__);
+    return IRQ_HANDLED;
+}
+
+static irqreturn_t spcd_handle_mode_irq(int irq, void *dev_id) {
+    // struct spcd_data *spcd = dev_id;
+    pr_alert(" %s\n", __FUNCTION__);
+    return IRQ_HANDLED;
+}
+
+
+
+
+
+
+
 static int spcd_probe(struct platform_device *pdev) {
     struct device *dev = &pdev->dev;
     struct spcd_data *spcd_data;
@@ -608,7 +644,7 @@ static int spcd_probe(struct platform_device *pdev) {
     }
 
     // Now that everything is setup and initialized, request IRQs and assign handlers.
-    ret = devm_request_irq(dev, spcd_data->irq_12v_status, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_12v_status", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_12v_status, NULL, spcd_handle_12v_status_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_12v_status", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
@@ -617,7 +653,7 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    ret = devm_request_irq(dev, spcd_data->irq_valve_open, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_valve_open", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_valve_open, NULL, spcd_handle_valve_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_valve_open", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
@@ -626,7 +662,7 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    ret = devm_request_irq(dev, spcd_data->irq_overpressure, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_overpressure", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_overpressure, NULL, spcd_handle_overpressure_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_overpressure", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
@@ -635,7 +671,7 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    ret = devm_request_irq(dev, spcd_data->irq_stuckon, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_stuckon", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_stuckon, NULL, spcd_handle_stuckon_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_stuckon", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
@@ -644,7 +680,7 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    ret = devm_request_irq(dev, spcd_data->irq_mode, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_mode", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_mode, NULL, spcd_handle_mode_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_mode", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
