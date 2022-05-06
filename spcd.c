@@ -644,7 +644,7 @@ static int spcd_probe(struct platform_device *pdev) {
     }
 
     // Now that everything is setup and initialized, request IRQs and assign handlers.
-    ret = devm_request_threaded_irq(dev, spcd_data->irq_12v_status, NULL, spcd_handle_12v_status_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_12v_status", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_12v_status, NULL, spcd_handle_12v_status_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_12v_status", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
@@ -653,7 +653,7 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    ret = devm_request_threaded_irq(dev, spcd_data->irq_valve_open, NULL, spcd_handle_valve_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_valve_open", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_valve_open, NULL, spcd_handle_valve_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_valve_open", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
@@ -662,7 +662,7 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    ret = devm_request_threaded_irq(dev, spcd_data->irq_overpressure, NULL, spcd_handle_overpressure_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_overpressure", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_overpressure, NULL, spcd_handle_overpressure_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_overpressure", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
@@ -671,7 +671,7 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    ret = devm_request_threaded_irq(dev, spcd_data->irq_stuckon, NULL, spcd_handle_stuckon_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_stuckon", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_stuckon, NULL, spcd_handle_stuckon_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_stuckon", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
@@ -680,7 +680,7 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    ret = devm_request_threaded_irq(dev, spcd_data->irq_mode, NULL, spcd_handle_mode_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_mode", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_mode, NULL, spcd_handle_mode_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_mode", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
