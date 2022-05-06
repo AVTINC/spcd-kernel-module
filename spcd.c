@@ -90,14 +90,13 @@ struct spcd_data {
 // Shamelessly cribbed from newer kernel versions (5.17.5)
 // Having this here, greatly reduces our repetition.
 // https://elixir.bootlin.com/linux/v5.17.5/C/ident/sysfs_emit
-int sysfs_emit(char *buf, const char *fmt, ...)
-{
+int sysfs_emit(char *buf, const char *fmt, ...) {
     va_list args;
     int len;
 
-    if (WARN(!buf || offset_in_page(buf),
-             "invalid sysfs_emit: buf:%p\n", buf))
+    if (WARN(!buf || offset_in_page(buf), "invalid sysfs_emit: buf:%p\n", buf)) {
         return 0;
+    }
 
     va_start(args, fmt);
     len = vscnprintf(buf, PAGE_SIZE, fmt, args);
@@ -153,8 +152,9 @@ static void spcd_blower_timer_update(struct spcd_data *spcd) {
     hrtimer_try_to_cancel(&spcd->blower_timer);
 
     // Set the pins low. (blower OFF)
+    // TODO: Check if we can safely move this to the else block handling zero-ing out timers. If so, we can eliminate a 'hiccup'.
     gpiod_set_value(spcd->gpio_out_blower_control, 0);
-    gpiod_set_value(spcd->gpio_out_blower_stat, 0);
+    gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, 0);
 
     // Recalculate the blower duty.
     if (spcd->blower_period > 0 && spcd->blower_duty_on > 0) {
@@ -166,7 +166,7 @@ static void spcd_blower_timer_update(struct spcd_data *spcd) {
 
         // Set the pin states.
         // We're going to turn the blower on.
-        gpiod_set_value(spcd->gpio_out_blower_stat, 1);
+        gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, 1);
         pr_alert("  blower_stat on.\n");
 
         // We're going to pulse this pin.
