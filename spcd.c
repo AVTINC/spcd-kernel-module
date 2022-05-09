@@ -562,12 +562,14 @@ static ssize_t buzzer_store(struct device *dev, struct device_attribute *attr, c
         gpiod_set_value_cansleep(spcd->gpio_out_buzzer_low, 1);
     } else if (val == 2) {
         pr_alert("set medium\n");
-        bitmap_fill(values, val);
-        gpiod_set_raw_array_value_cansleep(val, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
+        pr_alert(" before fill=%ld\n", values);
+        bitmap_fill(values, 2);
+        pr_alert(" after fill=%ld\n", values);
+        gpiod_set_array_value_cansleep(2, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
     } else if (val == 3) {
         pr_alert("set high\n");
-        bitmap_fill(values, val);
-        gpiod_set_raw_array_value_cansleep(val, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
+        bitmap_fill(values, 3);
+        gpiod_set_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
     }
 
     bitmap_free(values);
