@@ -134,7 +134,7 @@ enum hrtimer_restart valve_timer_callback(struct hrtimer *timer) {
 
 
 static void spcd_blower_timer_update(struct spcd_data *spcd) {
-    pr_alert(" %s\n", __FUNCTION__);
+    pr_debug(" %s\n", __FUNCTION__);
 
     // Clear any pending timers.
     hrtimer_try_to_cancel(&spcd->blower_timer);
@@ -146,34 +146,34 @@ static void spcd_blower_timer_update(struct spcd_data *spcd) {
 
     // Recalculate the blower duty.
     if (spcd->blower_period > 0 && spcd->blower_duty_on > 0) {
-        pr_alert("   period and duty set.\n");
+        pr_debug("   period and duty set.\n");
 
         spcd->blower_duty_off = ktime_set(0, ktime_sub(spcd->blower_period, spcd->blower_duty_on));
 
-        pr_alert("  on:%lld    off:%lld\n", ktime_to_ns(spcd->blower_duty_on), ktime_to_ns(spcd->blower_duty_off));
+        pr_debug("  on:%lld    off:%lld\n", ktime_to_ns(spcd->blower_duty_on), ktime_to_ns(spcd->blower_duty_off));
 
         // Set the pin states.
         // We're going to turn the blower on.
         gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, 1);
-        pr_alert("  blower_stat on.\n");
+        pr_debug("  blower_stat on.\n");
 
         // We're going to pulse this pin.
         spcd->blower_duty_state = 1;
         gpiod_set_value(spcd->gpio_out_blower_control, spcd->blower_duty_state);
-        pr_alert("  blower_control on.\n");
+        pr_debug("  blower_control on.\n");
 
         // If the duty is 100, blower_duty_off will be 0, and we don't need the timer.
         if (ktime_to_ns(spcd->blower_duty_off) > 0) {
-            pr_alert("  ENABLING BLOWER PWM TIMER\n");
+            pr_debug("  ENABLING BLOWER PWM TIMER\n");
             // Set a timer for the duty to be on.
             hrtimer_forward_now(&spcd->blower_timer, spcd->blower_duty_on);
             // fire the timer.
             hrtimer_restart(&spcd->blower_timer);
         } else {
-            pr_alert(" FULL DUTY. NO TIMER\n");
+            pr_debug(" FULL DUTY. NO TIMER\n");
         }
     } else {
-        pr_alert("   period or duty zero. Leaving off.\n");
+        pr_debug("   period or duty zero. Leaving off.\n");
         spcd->blower_duty_on = ktime_set(0, 0);
         spcd->blower_duty_off = ktime_set(0, 0);
     }
@@ -183,7 +183,7 @@ static void spcd_blower_timer_update(struct spcd_data *spcd) {
 
 
 static void spcd_valve_timer_update(struct spcd_data *spcd) {
-    pr_alert(" %s\n", __FUNCTION__);
+    pr_debug(" %s\n", __FUNCTION__);
 
     // Clear any pending timers.
     hrtimer_try_to_cancel(&spcd->valve_timer);
@@ -193,30 +193,30 @@ static void spcd_valve_timer_update(struct spcd_data *spcd) {
 
     // Recalculate the valve duty.
     if (spcd->valve_period > 0 && spcd->valve_duty_on > 0) {
-        pr_alert("   valve period and duty set.\n");
+        pr_debug("   valve period and duty set.\n");
 
         spcd->valve_duty_off = ktime_set(0, ktime_sub(spcd->valve_period, spcd->valve_duty_on));
 
-        pr_alert("  on:%lld    off:%lld\n", ktime_to_ns(spcd->valve_duty_on), ktime_to_ns(spcd->valve_duty_off));
+        pr_debug("  on:%lld    off:%lld\n", ktime_to_ns(spcd->valve_duty_on), ktime_to_ns(spcd->valve_duty_off));
 
         // Set the pin states.
         // We're going to pulse this pin.
         spcd->valve_duty_state = 1;
         gpiod_set_value(spcd->gpio_out_valve_control, spcd->valve_duty_state);
-        pr_alert("  valve_control on.\n");
+        pr_debug("  valve_control on.\n");
 
         // If the duty is 100, valve_duty_off will be 0, and we don't need the timer.
         if (ktime_to_ns(spcd->valve_duty_off) > 0) {
-            pr_alert("  ENABLING VALVE PWM TIMER\n");
+            pr_debug("  ENABLING VALVE PWM TIMER\n");
             // Set a timer for the duty to be on.
             hrtimer_forward_now(&spcd->valve_timer, spcd->valve_duty_on);
             // fire the timer.
             hrtimer_restart(&spcd->valve_timer);
         } else {
-            pr_alert(" FULL DUTY. NO TIMER\n");
+            pr_debug(" FULL DUTY. NO TIMER\n");
         }
     } else {
-        pr_alert("   period or duty zero. Leaving off.\n");
+        pr_debug("   period or duty zero. Leaving off.\n");
         spcd->valve_duty_on = ktime_set(0, 0);
         spcd->valve_duty_off = ktime_set(0, 0);
     }
@@ -490,7 +490,7 @@ static ssize_t buzzer_show(struct device *dev, struct device_attribute *attr, ch
     int val;
 
 
-    pr_alert("  check low\n");
+    pr_debug("  check low\n");
     val = gpiod_get_value_cansleep(spcd->gpio_out_buzzer_low);
     if (val == 0) { // Not low, check medium.
         values = bitmap_alloc(3, GFP_KERNEL);
@@ -505,14 +505,14 @@ static ssize_t buzzer_show(struct device *dev, struct device_attribute *attr, ch
         }
         bitmap_zero(zeros, 3);
 
-        pr_alert("   check medium\n");
+        pr_debug("   check medium\n");
         val = gpiod_get_array_value_cansleep(2, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
         if (val >= 0 && bitmap_equal(values, zeros, 2) == 0) {
             val = 2;
         }
 
         if (val == 0) { // Not medium. Check high.
-            pr_alert("    check high\n");
+            pr_debug("    check high\n");
             val = gpiod_get_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
             if (val >= 0 && bitmap_equal(values, zeros, 3) == 0) {
                 val = 3;
@@ -561,13 +561,13 @@ static ssize_t buzzer_store(struct device *dev, struct device_attribute *attr, c
     if (val == 1) {
         gpiod_set_value_cansleep(spcd->gpio_out_buzzer_low, 1);
     } else if (val == 2) {
-        pr_alert("set medium\n");
-        pr_alert(" before fill=%ld\n", values);
+        pr_debug("set medium\n");
+        pr_debug(" before fill=%ld\n", values);
         bitmap_fill(values, 2);
-        pr_alert(" after fill=%ld\n", values);
+        pr_debug(" after fill=%ld\n", values);
         gpiod_set_array_value_cansleep(2, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
     } else if (val == 3) {
-        pr_alert("set high\n");
+        pr_debug("set high\n");
         bitmap_fill(values, 3);
         gpiod_set_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
     }
@@ -613,31 +613,31 @@ ATTRIBUTE_GROUPS(spcd);
  */
 static irqreturn_t spcd_handle_12v_status_irq(int irq, void *dev_id) {
     // struct spcd_data *spcd = dev_id;
-    pr_alert(" %s\n", __FUNCTION__);
+    pr_debug(" %s\n", __FUNCTION__);
     return IRQ_HANDLED;
 }
 
 static irqreturn_t spcd_handle_valve_irq(int irq, void *dev_id) {
     // struct spcd_data *spcd = dev_id;
-    pr_alert(" %s\n", __FUNCTION__);
+    pr_debug(" %s\n", __FUNCTION__);
     return IRQ_HANDLED;
 }
 
 static irqreturn_t spcd_handle_overpressure_irq(int irq, void *dev_id) {
     // struct spcd_data *spcd = dev_id;
-    pr_alert(" %s\n", __FUNCTION__);
+    pr_debug(" %s\n", __FUNCTION__);
     return IRQ_HANDLED;
 }
 
 static irqreturn_t spcd_handle_stuckon_irq(int irq, void *dev_id) {
     // struct spcd_data *spcd = dev_id;
-    pr_alert(" %s\n", __FUNCTION__);
+    pr_debug(" %s\n", __FUNCTION__);
     return IRQ_HANDLED;
 }
 
 static irqreturn_t spcd_handle_mode_irq(int irq, void *dev_id) {
     // struct spcd_data *spcd = dev_id;
-    pr_alert(" %s\n", __FUNCTION__);
+    pr_debug(" %s\n", __FUNCTION__);
     return IRQ_HANDLED;
 }
 
@@ -653,7 +653,7 @@ static int spcd_probe(struct platform_device *pdev) {
 
     int ret = 0;
 
-    pr_alert(" %s\n", __FUNCTION__);
+    pr_debug(" %s\n", __FUNCTION__);
 
     // create the driver data....
     spcd_data = kzalloc(sizeof(struct spcd_data), GFP_KERNEL);
@@ -865,7 +865,7 @@ static int spcd_probe(struct platform_device *pdev) {
 static int spcd_remove(struct platform_device *pdev) {
     struct spcd_data *spcd_data = platform_get_drvdata(pdev);
 
-    pr_alert(" %s\n", __FUNCTION__);
+    pr_debug(" %s\n", __FUNCTION__);
 
     kfree(spcd_data);
 
