@@ -512,7 +512,7 @@ static ssize_t buzzer_show(struct device *dev, struct device_attribute *attr, ch
         }
 
         if (val == 0) { // Not medium. Check high.
-            pr_alert(   "check high\n");
+            pr_alert("    check high\n");
             val = gpiod_get_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
             if (val >= 0 && bitmap_equal(values, zeros, 3) == 0) {
                 val = 3;
@@ -554,16 +554,18 @@ static ssize_t buzzer_store(struct device *dev, struct device_attribute *attr, c
     bitmap_zero(values, 3);
 
     // Turn off everything
-    gpiod_set_value_cansleep(spcd->gpio_out_buzzer_low, val);
+    gpiod_set_value_cansleep(spcd->gpio_out_buzzer_low, 0);
     gpiod_set_array_value_cansleep(2, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
     gpiod_set_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
 
     if (val == 1) {
         gpiod_set_value_cansleep(spcd->gpio_out_buzzer_low, 1);
     } else if (val == 2) {
+        pr_alert("set medium\n");
         bitmap_fill(values, val);
         gpiod_set_raw_array_value_cansleep(val, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
     } else if (val == 3) {
+        pr_alert("set high\n");
         bitmap_fill(values, val);
         gpiod_set_raw_array_value_cansleep(val, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
     }
