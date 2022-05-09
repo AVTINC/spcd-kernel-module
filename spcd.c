@@ -61,11 +61,8 @@ struct spcd_data {
     struct gpio_desc *gpio_out_wdt_alert;
 
     struct gpio_desc *gpio_out_buzzer_low;
-    struct gpio_desc *gpio_out_buzzer_medium_0;
-    struct gpio_desc *gpio_out_buzzer_medium_1;
-    struct gpio_desc *gpio_out_buzzer_high_0;
-    struct gpio_desc *gpio_out_buzzer_high_1;
-    struct gpio_desc *gpio_out_buzzer_high_2;
+    struct gpio_descs *gpio_out_buzzer_medium;
+    struct gpio_descs *gpio_out_buzzer_high;
     struct gpio_desc *gpio_out_blower_stat;
     struct gpio_desc *gpio_out_1min;
     struct gpio_desc *gpio_out_blower_control;
@@ -348,7 +345,7 @@ static DEVICE_ATTR_RO(status_12v);
 static ssize_t valve_open_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
 
-    int val = gpiod_get_value(spcd->gpio_in_valve_open);
+    int val = gpiod_get_value_cansleep(spcd->gpio_in_valve_open);
     if (val < 0) {
         return val;
     }
@@ -362,7 +359,7 @@ static DEVICE_ATTR_RO(valve_open);
 static ssize_t overpressure_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
 
-    int val = gpiod_get_value(spcd->gpio_in_overpressure);
+    int val = gpiod_get_value_cansleep(spcd->gpio_in_overpressure);
     if (val < 0) {
         return val;
     }
@@ -376,7 +373,7 @@ static DEVICE_ATTR_RO(overpressure);
 static ssize_t stuck_on_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
 
-    int val = gpiod_get_value(spcd->gpio_in_stuckon);
+    int val = gpiod_get_value_cansleep(spcd->gpio_in_stuckon);
     if (val < 0) {
         return val;
     }
@@ -386,11 +383,11 @@ static ssize_t stuck_on_show(struct device *dev, struct device_attribute *attr, 
 static DEVICE_ATTR_RO(stuck_on);
 
 
-
+/* sfs attributes -- OUTPUTS */
 static ssize_t mode_switch_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
 
-    int val = gpiod_get_value(spcd->gpio_in_mode);
+    int val = gpiod_get_value_cansleep(spcd->gpio_in_mode);
     if (val < 0) {
         return val;
     }
@@ -398,6 +395,185 @@ static ssize_t mode_switch_show(struct device *dev, struct device_attribute *att
     return sysfs_emit(buf, "%d\n", val);
 }
 static DEVICE_ATTR_RO(mode_switch);
+
+static ssize_t pwr_hold_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+
+    int val = gpiod_get_value(spcd->gpio_out_pwr_hold);
+    if (val < 0) {
+        return val;
+    }
+
+    return sysfs_emit(buf, "%d\n", val);
+}
+
+static ssize_t pwr_hold_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+    int val;
+    int err;
+
+    err = kstrtoint(buf, 10, &val);
+    if (err) {
+        return err;
+    }
+
+    gpiod_set_value(spcd->gpio_out_pwr_hold, val);
+
+    return count;
+}
+static DEVICE_ATTR_RW(pwr_hold);
+
+
+
+static ssize_t wdt_alert_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+
+    int val = gpiod_get_value(spcd->gpio_out_wdt_alert);
+    if (val < 0) {
+        return val;
+    }
+
+    return sysfs_emit(buf, "%d\n", val);
+}
+
+static ssize_t wdt_alert_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+    int val;
+    int err;
+
+    err = kstrtoint(buf, 10, &val);
+    if (err) {
+        return err;
+    }
+
+    gpiod_set_value(spcd->gpio_out_wdt_alert, val);
+
+    return count;
+}
+static DEVICE_ATTR_RW(wdt_alert);
+
+
+
+static ssize_t one_min_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+
+    int val = gpiod_get_value_cansleep(spcd->gpio_out_1min);
+    if (val < 0) {
+        return val;
+    }
+
+    return sysfs_emit(buf, "%d\n", val);
+}
+
+static ssize_t one_min_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+    int val;
+    int err;
+
+    err = kstrtoint(buf, 10, &val);
+    if (err) {
+        return err;
+    }
+
+    gpiod_set_value_cansleep(spcd->gpio_out_1min, val);
+
+    return count;
+}
+static DEVICE_ATTR_RW(one_min);
+
+
+static ssize_t buzzer_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+
+    unsigned long *values;
+    unsigned long *zeros;
+    int val;
+
+
+    pr_alert("  check low\n");
+    val = gpiod_get_value_cansleep(spcd->gpio_out_buzzer_low);
+    if (val == 0) { // Not low, check medium.
+        values = bitmap_alloc(3, GFP_KERNEL);
+        if (!values) {
+            return -ENOMEM;
+        }
+        bitmap_zero(values, 3);
+
+        zeros = bitmap_alloc(3, GFP_KERNEL);
+        if (!zeros) {
+            return -ENOMEM;
+        }
+        bitmap_zero(zeros, 3);
+
+        pr_alert("   check medium\n");
+        val = gpiod_get_array_value_cansleep(2, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
+        if (val >= 0 && bitmap_equal(values, zeros, 2) == 0) {
+            val = 2;
+        }
+
+        if (val == 0) { // Not medium. Check high.
+            pr_alert(   "check high\n");
+            val = gpiod_get_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
+            if (val >= 0 && bitmap_equal(values, zeros, 3) == 0) {
+                val = 3;
+            }
+        }
+
+        bitmap_free(values);
+        bitmap_free(zeros);
+    }
+
+    if (val < 0) {
+        return val;
+    }
+
+    return sysfs_emit(buf, "%d\n", val);
+}
+
+static ssize_t buzzer_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+
+    unsigned long *values;
+    int val;
+    int err;
+
+    // Parse the mode value.
+    err = kstrtoint(buf, 10, &val);
+    if (err) {
+        return err;
+    }
+    if (val < 0 || val > 3) {
+        return -EINVAL;
+    }
+
+    // Allocate a bitmap of appropriate size
+    values = bitmap_alloc(3, GFP_KERNEL);
+    if (!values) {
+        return -ENOMEM;
+    }
+    bitmap_zero(values, 3);
+
+    // Turn off everything
+    gpiod_set_value_cansleep(spcd->gpio_out_buzzer_low, val);
+    gpiod_set_array_value_cansleep(2, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
+    gpiod_set_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
+
+    if (val == 1) {
+        gpiod_set_value_cansleep(spcd->gpio_out_buzzer_low, 1);
+    } else if (val == 2) {
+        bitmap_fill(values, val);
+        gpiod_set_raw_array_value_cansleep(val, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
+    } else if (val == 3) {
+        bitmap_fill(values, val);
+        gpiod_set_raw_array_value_cansleep(val, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
+    }
+
+    bitmap_free(values);
+
+    return count;
+}
+static DEVICE_ATTR_RW(buzzer);
+
 
 
 
@@ -412,6 +588,10 @@ static struct attribute *spcd_attrs[] = {
         &dev_attr_overpressure.attr,
         &dev_attr_stuck_on.attr,
         &dev_attr_mode_switch.attr,
+        &dev_attr_pwr_hold.attr,
+        &dev_attr_wdt_alert.attr,
+        &dev_attr_one_min.attr,
+        &dev_attr_buzzer.attr,
 
         NULL
 };
@@ -573,30 +753,15 @@ static int spcd_probe(struct platform_device *pdev) {
         dev_err(dev, "failed to get out-buzzer-low-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_low));
         return PTR_ERR(spcd_data->gpio_out_buzzer_low);
     }
-    spcd_data->gpio_out_buzzer_medium_0 = devm_gpiod_get_index(dev, "out-buzzer-medium", 0, GPIOD_OUT_LOW_OPEN_DRAIN);
-    if (IS_ERR(spcd_data->gpio_out_buzzer_medium_0)) {
-        dev_err(dev, "failed to get out-buzzer-medium-gpios[0]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_medium_0));
-        return PTR_ERR(spcd_data->gpio_out_buzzer_medium_0);
+    spcd_data->gpio_out_buzzer_medium = devm_gpiod_get_array(dev, "out-buzzer-medium", GPIOD_OUT_LOW_OPEN_DRAIN);
+    if (IS_ERR(spcd_data->gpio_out_buzzer_medium)) {
+        dev_err(dev, "failed to get out-buzzer-medium-gpios: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_medium));
+        return PTR_ERR(spcd_data->gpio_out_buzzer_medium);
     }
-    spcd_data->gpio_out_buzzer_medium_1 = devm_gpiod_get_index(dev, "out-buzzer-medium", 1, GPIOD_OUT_LOW_OPEN_DRAIN);
-    if (IS_ERR(spcd_data->gpio_out_buzzer_medium_1)) {
-        dev_err(dev, "failed to get out-buzzer-medium-gpios[1]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_medium_1));
-        return PTR_ERR(spcd_data->gpio_out_buzzer_medium_1);
-    }
-    spcd_data->gpio_out_buzzer_high_0 = devm_gpiod_get_index(dev, "out-buzzer-high", 0, GPIOD_OUT_LOW_OPEN_DRAIN);
-    if (IS_ERR(spcd_data->gpio_out_buzzer_high_0)) {
-        dev_err(dev, "failed to get out-buzzer-high-gpios[0]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_high_0));
-        return PTR_ERR(spcd_data->gpio_out_buzzer_high_0);
-    }
-    spcd_data->gpio_out_buzzer_high_1 = devm_gpiod_get_index(dev, "out-buzzer-high", 1, GPIOD_OUT_LOW_OPEN_DRAIN);
-    if (IS_ERR(spcd_data->gpio_out_buzzer_high_1)) {
-        dev_err(dev, "failed to get out-buzzer-high-gpios[1]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_high_1));
-        return PTR_ERR(spcd_data->gpio_out_buzzer_high_1);
-    }
-    spcd_data->gpio_out_buzzer_high_2 = devm_gpiod_get_index(dev, "out-buzzer-high", 2, GPIOD_OUT_LOW_OPEN_DRAIN);
-    if (IS_ERR(spcd_data->gpio_out_buzzer_high_2)) {
-        dev_err(dev, "failed to get out-buzzer-high-gpios[2]: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_high_2));
-        return PTR_ERR(spcd_data->gpio_out_buzzer_high_2);
+    spcd_data->gpio_out_buzzer_high = devm_gpiod_get_array(dev, "out-buzzer-high", GPIOD_OUT_LOW_OPEN_DRAIN);
+    if (IS_ERR(spcd_data->gpio_out_buzzer_high)) {
+        dev_err(dev, "failed to get out-buzzer-high-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_high));
+        return PTR_ERR(spcd_data->gpio_out_buzzer_high);
     }
     spcd_data->gpio_out_blower_stat = devm_gpiod_get(dev, "out-blower-stat", GPIOD_OUT_LOW_OPEN_DRAIN);
     if (IS_ERR(spcd_data->gpio_out_blower_stat)) {
