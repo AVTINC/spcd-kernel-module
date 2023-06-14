@@ -252,6 +252,31 @@ static ssize_t blower_duty_cycle_store(struct device *dev, struct device_attribu
 
 static DEVICE_ATTR_RW(blower_duty_cycle);
 
+/*JP Adding in something to try to write some info to a virtual file when something happens*/
+static ssize_t error_log_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+
+    return sysfs_emit(buf, "%lld\n", ktime_to_ns(spcd->blower_duty_on));
+}
+
+static ssize_t error_log_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+    long dutyonnanos;
+    int err;
+
+    err = kstrtol(buf, 10, &dutyonnanos);
+    if (err) {
+        return err;
+    }
+
+    //spcd->blower_duty_on = ktime_set(0, dutyonnanos);
+    //spcd_blower_timer_update(spcd);
+
+    return count;
+}
+
+static DEVICE_ATTR_RW(error_log);
+
 
 
 static ssize_t blower_period_show(struct device *dev, struct device_attribute *attr, char *buf) {
@@ -598,6 +623,7 @@ static struct attribute *spcd_attrs[] = {
         &dev_attr_wdt_alert.attr,
         &dev_attr_one_min.attr,
         &dev_attr_buzzer.attr,
+	&dev_attr_error_log.attr,
 
         NULL
 };
