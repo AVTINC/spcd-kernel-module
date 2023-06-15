@@ -154,7 +154,7 @@ static void spcd_blower_timer_update(struct spcd_data *spcd) {
 
         // Set the pin states.
         // We're going to turn the blower on.
-        gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, 1);
+        gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, 0);
         pr_debug("  blower_stat on.\n");
 
         // We're going to pulse this pin.
