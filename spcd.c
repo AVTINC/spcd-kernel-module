@@ -46,6 +46,7 @@ struct spcd_data {
 
     struct gpio_desc *gpio_in_valve_open;
     int irq_valve_open;
+    int irq_error_log;
 
     struct gpio_desc *gpio_in_overpressure;
     int irq_overpressure;
@@ -259,26 +260,6 @@ static ssize_t error_log_show(struct device *dev, struct device_attribute *attr,
     return sysfs_emit(buf, "%lld\n", ktime_to_ns(spcd->blower_duty_on));
 }
 
-static ssize_t error_log_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
-    struct spcd_data *spcd = dev_get_drvdata(dev);
-    long dutyonnanos;
-    int err;
-
-    err = kstrtol(buf, 10, &dutyonnanos);
-    if (err) {
-        return err;
-    }
-
-    //spcd->blower_duty_on = ktime_set(0, dutyonnanos);
-    //spcd_blower_timer_update(spcd);
-
-    return count;
-}
-
-static DEVICE_ATTR_RW(error_log);
-
-
-
 static ssize_t blower_period_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
 
@@ -380,6 +361,18 @@ static ssize_t valve_open_show(struct device *dev, struct device_attribute *attr
     return sysfs_emit(buf, "%d\n", val);
 }
 static DEVICE_ATTR_RO(valve_open);
+
+static ssize_t error_log_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+
+    int val = gpiod_get_value_cansleep(spcd->gpio_in_valve_open);
+    if (val < 0) {
+        return val;
+    }
+
+    return sysfs_emit(buf, "%d\n", val);
+}
+static DEVICE_ATTR_RO(error_log_open);
 
 
 
@@ -714,7 +707,6 @@ static int spcd_probe(struct platform_device *pdev) {
         return spcd_data->irq_valve_open;
     }
 
-
     spcd_data->gpio_in_overpressure = devm_gpiod_get(dev, "in-overpressure", GPIOD_IN);
     if (IS_ERR(spcd_data->gpio_in_overpressure)) {
         dev_err(dev, "failed to get in-overpressure-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_overpressure));
@@ -856,6 +848,14 @@ static int spcd_probe(struct platform_device *pdev) {
     }
     if (ret) {
         dev_err(&pdev->dev, "couldn't request irq %s %d: %d\n", "irq_valve_open", spcd_data->irq_valve_open, ret);
+        return ret;
+    }
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_error_log, NULL, spcd_handle_valve_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_error_log", spcd_data);
+    if (ret == -ENOSYS) {
+        return -EPROBE_DEFER;
+    }
+    if (ret) {
+        dev_err(&pdev->dev, "couldn't request irq %s %d: %d\n", "irq_error_log", spcd_data->irq_error_log, ret);
         return ret;
     }
 
