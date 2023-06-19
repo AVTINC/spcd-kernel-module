@@ -372,7 +372,7 @@ static ssize_t error_log_show(struct device *dev, struct device_attribute *attr,
 
     return sysfs_emit(buf, "%d\n", val);
 }
-static DEVICE_ATTR_RO(error_log_open);
+static DEVICE_ATTR_RO(error_log);
 
 
 
