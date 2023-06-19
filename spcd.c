@@ -358,7 +358,7 @@ static DEVICE_ATTR_RO(valve_open);
 static ssize_t error_log_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
 
-    int val = gpiod_get_value_cansleep(spcd->gpio_in_valve_open);
+    int val = gpiod_get_value_cansleep(spcd->gpio_in_valve_open)
     if (val < 0) {
         return val;
     }
