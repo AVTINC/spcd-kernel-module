@@ -142,7 +142,7 @@ static void spcd_blower_timer_update(struct spcd_data *spcd) {
     // Set the pins low. (blower OFF)
     // TODO: Check if we can safely move this to the else block handling zero-ing out timers. If so, we can eliminate a 'hiccup'.
     gpiod_set_value(spcd->gpio_out_blower_control, 0);
-    gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, 0);
+    //gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, 0);
 
     // Recalculate the blower duty.
     if (spcd->blower_period > 0 && spcd->blower_duty_on > 0) {
@@ -154,7 +154,7 @@ static void spcd_blower_timer_update(struct spcd_data *spcd) {
 
         // Set the pin states.
         // We're going to turn the blower on.
-        gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, 0);
+        //gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, 0);
         pr_debug("  blower_stat on.\n");
 
         // We're going to pulse this pin.
