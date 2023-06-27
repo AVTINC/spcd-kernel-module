@@ -81,6 +81,8 @@ struct spcd_data {
     ktime_t valve_duty_off;
     u8 valve_duty_state;
     struct hrtimer valve_timer;
+
+    u8 inputs; // Packed byte representation of the input lines. Bytes are independently updated by interrupt handlers.
 };
 
 
@@ -223,6 +225,38 @@ static void spcd_valve_timer_update(struct spcd_data *spcd) {
 
     return;
 }
+
+static int spcd_set_state(struct spcd_data *spcd) {
+    // TODO: How to update the gpiod state from input vars.
+
+
+    spcd_blower_timer_update(spcd);
+    spcd_valve_timer_update(spcd);
+
+    return 0;
+}
+
+/**
+ * Reads the current gpio_in lines into the packed byte variable ('inputs').
+ * This is to be used sparingly, as executes at least four i2c transactions per function call.
+ * In the threaded IRQ handlers for input lines, we only read the the state of the input which triggered the interrupt.
+ *
+ * @param spcd The spcd_data struct to update.
+ * @return 0 upon success.
+ */
+static int spcd_read_state(struct spcd_data *spcd) {
+    u8 val = 0x00;
+    val |= (gpiod_get_value(spcd->gpio_in_12v_status) > 0 ? 1 : 0) << 4;
+    val |= (gpiod_get_value_cansleep(spcd->gpio_in_valve_open) > 0 ? 1 : 0) << 3;
+    val |= (gpiod_get_value_cansleep(spcd->gpio_in_overpressure) > 0 ? 1 : 0) << 2;
+    val |= (gpiod_get_value_cansleep(spcd->gpio_in_stuckon) > 0 ? 1 : 0) << 1;
+    val |= (gpiod_get_value_cansleep(spcd->gpio_in_mode) > 0 ? 1 : 0);
+
+    spcd->inputs = val;
+
+    return 0;
+}
+
 
 
 /* -- sysfs attributes -- PWM -- */
@@ -609,42 +643,42 @@ ATTRIBUTE_GROUPS(spcd);
  * gpio lines (reads / writes) to 'sleep'. Since these are not memory-mapped
  * output lines, it takes some overhead for the i2c communications.
  *
- * Moving to bottom-half IRQs shouldn't greatly impact things.
+ * Using these bottom-half IRQs shouldn't greatly impact things.
  */
 static irqreturn_t spcd_handle_12v_status_irq(int irq, void *dev_id) {
-    // struct spcd_data *spcd = dev_id;
+    struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
+    spcd->inputs &= ~((gpiod_get_value(spcd->gpio_in_12v_status) > 0 ? 1 : 0) << 4) ;
     return IRQ_HANDLED;
 }
 
 static irqreturn_t spcd_handle_valve_irq(int irq, void *dev_id) {
-    // struct spcd_data *spcd = dev_id;
+    struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
+    spcd->inputs &= ~((gpiod_get_value_cansleep(spcd->gpio_in_valve_open) > 0 ? 1 : 0) << 3) ;
     return IRQ_HANDLED;
 }
 
 static irqreturn_t spcd_handle_overpressure_irq(int irq, void *dev_id) {
-    // struct spcd_data *spcd = dev_id;
+    struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
+    spcd->inputs &= ~((gpiod_get_value_cansleep(spcd->gpio_in_overpressure) > 0 ? 1 : 0) << 2) ;
     return IRQ_HANDLED;
 }
 
 static irqreturn_t spcd_handle_stuckon_irq(int irq, void *dev_id) {
-    // struct spcd_data *spcd = dev_id;
+    struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
+    spcd->inputs &= ~((gpiod_get_value_cansleep(spcd->gpio_in_stuckon) > 0 ? 1 : 0) << 1) ;
     return IRQ_HANDLED;
 }
 
 static irqreturn_t spcd_handle_mode_irq(int irq, void *dev_id) {
-    // struct spcd_data *spcd = dev_id;
+    struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
+    spcd->inputs &= ~(gpiod_get_value_cansleep(spcd->gpio_in_mode) > 0 ? 1 : 0);
     return IRQ_HANDLED;
 }
-
-
-
-
-
 
 
 static int spcd_probe(struct platform_device *pdev) {
@@ -790,6 +824,9 @@ static int spcd_probe(struct platform_device *pdev) {
 
     // TODO: Initial GPIO state tracking vars.
 
+
+
+
     // Setup softPWM hardware timers.
     hrtimer_init(&spcd_data->blower_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED_HARD);
     spcd_data->blower_timer.function = blower_timer_callback;
@@ -801,8 +838,8 @@ static int spcd_probe(struct platform_device *pdev) {
     platform_set_drvdata(pdev, spcd_data);
 
     // TODO sync state with a set / read.
-    spcd_blower_timer_update(spcd_data);
-    spcd_valve_timer_update(spcd_data);
+    spcd_set_state(spcd_data);
+    spcd_read_state(spcd_data);
 
 
     // Associate sysfs attribute groups.
