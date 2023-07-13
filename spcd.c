@@ -45,6 +45,9 @@ struct spcd_data {
     struct gpio_desc    *gpio_in_12v_status;
     int                 irq_12v_status;
 
+    struct gpio_desc    *gpio_in_failsafe_status;
+    int                 irq_failsafe_status;
+
     struct gpio_desc    *gpio_in_valve_open;
     int                 irq_valve_open;
 
@@ -149,6 +152,18 @@ static ssize_t status_12v_show(struct device *dev, struct device_attribute *attr
     return sysfs_emit(buf, "%d\n", val);
 }
 static DEVICE_ATTR_RO(status_12v);
+
+static ssize_t status_failsafe_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+
+    int val = gpiod_get_value(spcd->gpio_in_failsafe_status);
+    if (val < 0) {
+        return val;
+    }
+
+    return sysfs_emit(buf, "%d\n", val);
+}
+static DEVICE_ATTR_RO(status_failsafe);
 
 static ssize_t valve_open_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
@@ -294,6 +309,7 @@ static DEVICE_ATTR_RW(failsafe);
 
 static struct attribute *spcd_attrs[] = {
         &dev_attr_status_12v.attr,
+        &dev_attr_status_failsafe.attr,
         &dev_attr_valve_open.attr,
         &dev_attr_overpressure.attr,
         &dev_attr_stuck_on.attr,
@@ -317,6 +333,12 @@ ATTRIBUTE_GROUPS(spcd);
  * Moving to bottom-half IRQs shouldn't greatly impact things.
  */
 static irqreturn_t spcd_handle_12v_status_irq(int irq, void *dev_id) {
+    // struct spcd_data *spcd = dev_id;
+    pr_debug(" %s\n", __FUNCTION__);
+    return IRQ_HANDLED;
+}
+
+static irqreturn_t spcd_handle_failsafe_status_irq(int irq, void *dev_id) {
     // struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
     return IRQ_HANDLED;
@@ -409,6 +431,18 @@ static int spcd_probe(struct platform_device *pdev) {
     if (spcd_data->irq_12v_status < 0) {
         dev_err(dev, "failed to get IRQ for in_12v_status: err=%d\n", spcd_data->irq_12v_status);
         return spcd_data->irq_12v_status;
+    }
+
+
+    spcd_data->gpio_in_failsafe_status = devm_gpiod_get(dev, "in-failsafe-status", GPIOD_IN);
+    if (IS_ERR(spcd_data->gpio_in_failsafe_status)) {
+        dev_err(dev, "failed to get in-failsafe-status-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_failsafe_status));
+        return PTR_ERR(spcd_data->gpio_in_failsafe_status);
+    }
+    spcd_data->irq_failsafe_status = gpiod_to_irq(spcd_data->gpio_in_failsafe_status);
+    if (spcd_data->irq_failsafe_status < 0) {
+        dev_err(dev, "failed to get IRQ for in_failsafe_status: err=%d\n", spcd_data->irq_failsafe_status);
+        return spcd_data->irq_failsafe_status;
     }
 
 
@@ -516,6 +550,15 @@ static int spcd_probe(struct platform_device *pdev) {
     }
     if (ret) {
         dev_err(&pdev->dev, "couldn't request irq %s %d: %d\n", "irq_12v_status", spcd_data->irq_12v_status, ret);
+        return ret;
+    }
+
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_failsafe_status, NULL, spcd_handle_failsafe_status_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_failsafe_status", spcd_data);
+    if (ret == -ENOSYS) {
+        return -EPROBE_DEFER;
+    }
+    if (ret) {
+        dev_err(&pdev->dev, "couldn't request irq %s %d: %d\n", "irq_failsafe_status", spcd_data->irq_failsafe_status, ret);
         return ret;
     }
 
