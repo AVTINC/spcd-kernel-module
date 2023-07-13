@@ -64,15 +64,13 @@ struct spcd_data {
     struct gpio_desc    *gpio_out_pwr_hold; // Unused
     struct gpio_desc    *gpio_out_wdt_alert;
 
-    struct gpio_desc    *gpio_out_buzzer_low;
-    struct gpio_descs   *gpio_out_buzzer_medium;
-    struct gpio_descs   *gpio_out_buzzer_high;
+    struct gpio_desc    *gpio_out_failsafe;
     struct gpio_desc    *gpio_out_blower_stat;
     struct gpio_desc    *gpio_out_1min;
 
     struct pwm_state    blower_state;
     struct pwm_state    valve_state;
-    u8                  buzzer_enable;
+    u8                  failsafe_enable;
 
     struct hrtimer      pulse_timer;
     u8                  pulse_value;
@@ -114,8 +112,14 @@ enum hrtimer_restart pulse_timer_callback(struct hrtimer *timer) {
 
 
 static int spcd_set_state(struct spcd_data *spcd) {
-    gpiod_set_value(spcd->gpio_out_buzzer_low, spcd->buzzer_enable);
+    gpiod_set_value(spcd->gpio_out_failsafe, spcd->failsafe_enable);
+
     gpiod_set_value(spcd->gpio_out_blower_stat, spcd->blower_state.enabled ? 1 : 0);
+    hrtimer_try_to_cancel(&spcd->pulse_timer);
+    if (spcd->blower_state.enabled) {
+        hrtimer_forward_now(&spcd->pulse_timer, spcd->pulse_period);
+        hrtimer_restart(&spcd->pulse_timer);
+    }
 //    gpiod_set_value(spcd->gpio_out_pwr_hold, 0); // TODO: Future. Currently DNP.
 //    gpiod_set_value(spcd->gpio_out_wdt_alert, 0); // TODO: Set this if we restart 'unclean'.
 
@@ -256,12 +260,10 @@ static ssize_t wdt_alert_store(struct device *dev, struct device_attribute *attr
 }
 static DEVICE_ATTR_RW(wdt_alert);
 
-
-
-static ssize_t one_min_show(struct device *dev, struct device_attribute *attr, char *buf) {
+static ssize_t failsafe_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
 
-    int val = gpiod_get_value_cansleep(spcd->gpio_out_1min);
+    int val = gpiod_get_value(spcd->gpio_out_failsafe);
     if (val < 0) {
         return val;
     }
@@ -269,8 +271,9 @@ static ssize_t one_min_show(struct device *dev, struct device_attribute *attr, c
     return sysfs_emit(buf, "%d\n", val);
 }
 
-static ssize_t one_min_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+static ssize_t failsafe_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
+
     int val;
     int err;
 
@@ -279,108 +282,11 @@ static ssize_t one_min_store(struct device *dev, struct device_attribute *attr, 
         return err;
     }
 
-    gpiod_set_value_cansleep(spcd->gpio_out_1min, val);
+    gpiod_set_value(spcd->gpio_out_failsafe, val);
 
     return count;
 }
-static DEVICE_ATTR_RW(one_min);
-
-
-static ssize_t buzzer_show(struct device *dev, struct device_attribute *attr, char *buf) {
-    struct spcd_data *spcd = dev_get_drvdata(dev);
-
-    unsigned long *values;
-    unsigned long *zeros;
-    int val;
-
-
-    pr_debug("  check low\n");
-    val = gpiod_get_value_cansleep(spcd->gpio_out_buzzer_low);
-    if (val == 0) { // Not low, check medium.
-        values = bitmap_alloc(3, GFP_KERNEL);
-        if (!values) {
-            return -ENOMEM;
-        }
-        bitmap_zero(values, 3);
-
-        zeros = bitmap_alloc(3, GFP_KERNEL);
-        if (!zeros) {
-            return -ENOMEM;
-        }
-        bitmap_zero(zeros, 3);
-
-        pr_debug("   check medium\n");
-        val = gpiod_get_array_value_cansleep(2, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
-        if (val >= 0 && bitmap_equal(values, zeros, 2) == 0) {
-            val = 2;
-        }
-
-        if (val == 0) { // Not medium. Check high.
-            pr_debug("    check high\n");
-            val = gpiod_get_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
-            if (val >= 0 && bitmap_equal(values, zeros, 3) == 0) {
-                val = 3;
-            }
-        }
-
-        bitmap_free(values);
-        bitmap_free(zeros);
-    }
-
-    if (val < 0) {
-        return val;
-    }
-
-    return sysfs_emit(buf, "%d\n", val);
-}
-
-static ssize_t buzzer_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
-    struct spcd_data *spcd = dev_get_drvdata(dev);
-
-    unsigned long *values;
-    int val;
-    int err;
-
-    // Parse the mode value.
-    err = kstrtoint(buf, 10, &val);
-    if (err) {
-        return err;
-    }
-    if (val < 0 || val > 3) {
-        return -EINVAL;
-    }
-
-    // Allocate a bitmap of appropriate size
-    values = bitmap_alloc(3, GFP_KERNEL);
-    if (!values) {
-        return -ENOMEM;
-    }
-    bitmap_zero(values, 3);
-
-    // Turn off everything
-    gpiod_set_value_cansleep(spcd->gpio_out_buzzer_low, 0);
-    gpiod_set_array_value_cansleep(2, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
-    gpiod_set_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
-
-    if (val == 1) {
-        gpiod_set_value_cansleep(spcd->gpio_out_buzzer_low, 1);
-    } else if (val == 2) {
-        pr_debug("set medium\n");
-        pr_debug(" before fill=%ld\n", values);
-        bitmap_fill(values, 2);
-        pr_debug(" after fill=%ld\n", values);
-        gpiod_set_array_value_cansleep(2, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
-    } else if (val == 3) {
-        pr_debug("set high\n");
-        bitmap_fill(values, 3);
-        gpiod_set_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
-    }
-
-    bitmap_free(values);
-
-    return count;
-}
-static DEVICE_ATTR_RW(buzzer);
+static DEVICE_ATTR_RW(failsafe);
 
 
 
@@ -394,8 +300,7 @@ static struct attribute *spcd_attrs[] = {
         &dev_attr_mode_switch.attr,
         &dev_attr_pwr_hold.attr,
         &dev_attr_wdt_alert.attr,
-        &dev_attr_one_min.attr,
-        &dev_attr_buzzer.attr,
+        &dev_attr_failsafe.attr,
 
         NULL
 };
@@ -571,20 +476,10 @@ static int spcd_probe(struct platform_device *pdev) {
 
 
     // All outputs on the I2C expander are open-drain.
-    spcd_data->gpio_out_buzzer_low = devm_gpiod_get(dev, "out-buzzer-low", GPIOD_OUT_LOW_OPEN_DRAIN);
-    if (IS_ERR(spcd_data->gpio_out_buzzer_low)) {
-        dev_err(dev, "failed to get out-buzzer-low-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_low));
-        return PTR_ERR(spcd_data->gpio_out_buzzer_low);
-    }
-    spcd_data->gpio_out_buzzer_medium = devm_gpiod_get_array(dev, "out-buzzer-medium", GPIOD_OUT_LOW_OPEN_DRAIN);
-    if (IS_ERR(spcd_data->gpio_out_buzzer_medium)) {
-        dev_err(dev, "failed to get out-buzzer-medium-gpios: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_medium));
-        return PTR_ERR(spcd_data->gpio_out_buzzer_medium);
-    }
-    spcd_data->gpio_out_buzzer_high = devm_gpiod_get_array(dev, "out-buzzer-high", GPIOD_OUT_LOW_OPEN_DRAIN);
-    if (IS_ERR(spcd_data->gpio_out_buzzer_high)) {
-        dev_err(dev, "failed to get out-buzzer-high-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_high));
-        return PTR_ERR(spcd_data->gpio_out_buzzer_high);
+    spcd_data->gpio_out_failsafe = devm_gpiod_get(dev, "out-failsafe", GPIOD_OUT_LOW_OPEN_DRAIN);
+    if (IS_ERR(spcd_data->gpio_out_failsafe)) {
+        dev_err(dev, "failed to get out-failsafe-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_failsafe));
+        return PTR_ERR(spcd_data->gpio_out_failsafe);
     }
     spcd_data->gpio_out_blower_stat = devm_gpiod_get(dev, "out-blower-stat", GPIOD_OUT_LOW_OPEN_DRAIN);
     if (IS_ERR(spcd_data->gpio_out_blower_stat)) {
@@ -598,7 +493,7 @@ static int spcd_probe(struct platform_device *pdev) {
     }
 
     // Setup initial GPIO states
-    spcd_data->buzzer_enable = 0;
+    spcd_data->failsafe_enable = 0;
 
     platform_set_drvdata(pdev, spcd_data);
 
@@ -660,11 +555,6 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    // Startup the pulse timer.
-    hrtimer_try_to_cancel(&spcd_data->pulse_timer);
-    hrtimer_forward_now(&spcd_data->pulse_timer, spcd_data->pulse_period);
-    hrtimer_restart(&spcd_data->pulse_timer);
-
     // Fall through to success
     return ret;
 }
@@ -699,7 +589,7 @@ static struct platform_driver spcd_driver = {
 
 module_platform_driver(spcd_driver);
 
-MODULE_AUTHOR("bryan.varner@e-gineering.com");
-MODULE_DESCRIPTION("AVT SPCD Platform Driver.");
+MODULE_AUTHOR("bryan.varner@robustified.com");
+MODULE_DESCRIPTION("AVT SPCD Platform Driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:spcd");
