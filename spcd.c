@@ -32,6 +32,7 @@
 #include <linux/platform_device.h>
 #include <linux/module.h>
 #include <linux/poll.h>
+#include <linux/pwm.h>
 #include <linux/uaccess.h>
 #include <linux/hrtimer.h>
 // Added to support sysfs_emit, being pulled in from newer kernel releases.
@@ -56,31 +57,30 @@ struct spcd_data {
     struct gpio_desc *gpio_in_mode;
     int irq_mode;
 
+    struct gpio_desc *gpio_in_failsafe;
+    int irq_failsafe_status;
+
+    struct pwm_device *pwmd_blower;
+    struct pwm_device *pwmd_valve;
+
 
     struct gpio_desc *gpio_out_pwr_hold; // Unused
     struct gpio_desc *gpio_out_wdt_alert;
 
-    struct gpio_desc *gpio_out_buzzer_low;
-    struct gpio_descs *gpio_out_buzzer_medium;
-    struct gpio_descs *gpio_out_buzzer_high;
+    struct gpio_desc *gpio_out_failsafe_enable;
     struct gpio_desc *gpio_out_blower_stat;
-    struct gpio_desc *gpio_out_1min;
-    struct gpio_desc *gpio_out_blower_control;
-    struct gpio_desc *gpio_out_valve_control;
+    struct gpio_desc *gpio_out_cpu_heartbeat;
 
+    struct pwm_state blower_state;
+    struct pwm_state valve_state;
+    u8 failsafe_enable;
 
-    ktime_t blower_period;
-    ktime_t blower_duty_on;
-    ktime_t blower_duty_off;
-    u8 blower_duty_state;
-    struct hrtimer blower_timer;
+    struct hrtimer cpu_heartbeat_timer;
+    u8 cpu_heartbeat_value;
+    ktime_t cpu_heartbeat_period;
 
-
-    ktime_t valve_period;
-    ktime_t valve_duty_on;
-    ktime_t valve_duty_off;
-    u8 valve_duty_state;
-    struct hrtimer valve_timer;
+    struct work_struct heartbeat_work;
+    wait_queue_head_t heartbeat_wq;
 };
 
 
@@ -102,231 +102,55 @@ int sysfs_emit(char *buf, const char *fmt, ...) {
     return len;
 }
 
+static void heartbeat_handler(struct work_struct *work) {
+    struct spcd_data *spcd = container_of(work, struct spcd_data, heartbeat_work);
+
+    pr_debug(" write heartbeat: %d\n", spcd->cpu_heartbeat_value);
+    gpiod_set_value_cansleep(spcd->gpio_out_cpu_heartbeat, spcd->cpu_heartbeat_value);
+}
 
 
-// Blower PWM Callback
-enum hrtimer_restart blower_timer_callback(struct hrtimer *timer) {
-    struct spcd_data *spcd = container_of(timer, struct spcd_data, blower_timer);
+// Timer that fires every 30 seconds to produce the heartbeat pulse.
+// If the blower has a non-0 duty cycle the pin state will be toggled.
+// If the blower has a 0 duty cycle, the pin will be set 0 and held there.
+enum hrtimer_restart cpu_heartbeat_timer_callback(struct hrtimer *timer) {
+    struct spcd_data *spcd = container_of(timer, struct spcd_data, cpu_heartbeat_timer);
 
-    // Swap from on to off.
-    spcd->blower_duty_state = spcd->blower_duty_state ^ 1;
-    gpiod_set_value(spcd->gpio_out_blower_control, spcd->blower_duty_state);
+    if (spcd->blower_state.duty_cycle > 0) {
+        spcd->cpu_heartbeat_value = spcd->cpu_heartbeat_value ^ 1;
+        schedule_work(&spcd->heartbeat_work);
+    } else if (spcd->cpu_heartbeat_value != 0) {
+        spcd->cpu_heartbeat_value = 0;
+        schedule_work(&spcd->heartbeat_work);
+    }
 
-    // If the pins are off, wait for the time they should be off.
-    // If the pins are on, wait for the time they should be on.
-    hrtimer_forward_now(&spcd->blower_timer, spcd->blower_duty_state == 0 ? spcd->blower_duty_off : spcd->blower_duty_on);
-
+    hrtimer_forward_now(&spcd->cpu_heartbeat_timer, spcd->cpu_heartbeat_period);
     return HRTIMER_RESTART;
 }
 
 
-// Valve PWM Callback
-enum hrtimer_restart valve_timer_callback(struct hrtimer *timer) {
-    struct spcd_data *spcd = container_of(timer, struct spcd_data, valve_timer);
+static int spcd_set_state(struct spcd_data *spcd) {
+    pr_debug("spcd_set_state():\n");
+    pr_debug("  failsafe_enable: %s\n", spcd->failsafe_enable > 0 ? "on" : "off");
+    gpiod_set_value_cansleep(spcd->gpio_out_failsafe_enable, spcd->failsafe_enable);
+    pr_debug("  blower_stat: %s\n", spcd->blower_state.duty_cycle > 0 ? "on" : "off");
+    gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, spcd->blower_state.duty_cycle > 0 ? 1 : 0);
 
-    spcd->valve_duty_state = spcd->valve_duty_state ^ 1;
-    gpiod_set_value(spcd->gpio_out_valve_control, spcd->valve_duty_state);
+//    gpiod_set_value(spcd->gpio_out_pwr_hold, 0); // TODO: Future. Currently DNP.
+//    gpiod_set_value(spcd->gpio_out_wdt_alert, 0); // TODO: Set this if we restart 'unclean'.
 
-    hrtimer_forward_now(&spcd->valve_timer, spcd->valve_duty_state == 0 ? spcd->valve_duty_off : spcd->valve_duty_on);
+    pr_debug("  blower [duty:%ld, period:%ld, enabled: %s]\n", spcd->blower_state.duty_cycle, spcd->blower_state.period, spcd->blower_state.enabled ? "true" : "false");
+    pwm_apply_state(spcd->pwmd_blower, &(spcd->blower_state));
+    pr_debug("  valve [duty:%ld, period:%ld, enabled: %s]\n", spcd->valve_state.duty_cycle, spcd->valve_state.period, spcd->valve_state.enabled ? "true" : "false");
+    pwm_apply_state(spcd->pwmd_valve, &(spcd->valve_state));
 
-    return HRTIMER_RESTART;
+    return 0;
 }
 
-
-static void spcd_blower_timer_update(struct spcd_data *spcd) {
-    pr_debug(" %s\n", __FUNCTION__);
-
-    // Clear any pending timers.
-    hrtimer_try_to_cancel(&spcd->blower_timer);
-
-    // Set the pins low. (blower OFF)
-    // TODO: Check if we can safely move this to the else block handling zero-ing out timers. If so, we can eliminate a 'hiccup'.
-    gpiod_set_value(spcd->gpio_out_blower_control, 0);
-    gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, 0);
-
-    // Recalculate the blower duty.
-    if (spcd->blower_period > 0 && spcd->blower_duty_on > 0) {
-        pr_debug("   period and duty set.\n");
-
-        spcd->blower_duty_off = ktime_set(0, ktime_sub(spcd->blower_period, spcd->blower_duty_on));
-
-        pr_debug("  on:%lld    off:%lld\n", ktime_to_ns(spcd->blower_duty_on), ktime_to_ns(spcd->blower_duty_off));
-
-        // Set the pin states.
-        // We're going to turn the blower on.
-        gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, 1);
-        pr_debug("  blower_stat on.\n");
-
-        // We're going to pulse this pin.
-        spcd->blower_duty_state = 1;
-        gpiod_set_value(spcd->gpio_out_blower_control, spcd->blower_duty_state);
-        pr_debug("  blower_control on.\n");
-
-        // If the duty is 100, blower_duty_off will be 0, and we don't need the timer.
-        if (ktime_to_ns(spcd->blower_duty_off) > 0) {
-            pr_debug("  ENABLING BLOWER PWM TIMER\n");
-            // Set a timer for the duty to be on.
-            hrtimer_forward_now(&spcd->blower_timer, spcd->blower_duty_on);
-            // fire the timer.
-            hrtimer_restart(&spcd->blower_timer);
-        } else {
-            pr_debug(" FULL DUTY. NO TIMER\n");
-        }
-    } else {
-        pr_debug("   period or duty zero. Leaving off.\n");
-        spcd->blower_duty_on = ktime_set(0, 0);
-        spcd->blower_duty_off = ktime_set(0, 0);
-    }
-
-    return;
+static int spcd_read_state(struct spcd_data *spcd) {
+    // TODO: read the input lines and derive that into state on the spcd struct.
+    return 0;
 }
-
-
-static void spcd_valve_timer_update(struct spcd_data *spcd) {
-    pr_debug(" %s\n", __FUNCTION__);
-
-    // Clear any pending timers.
-    hrtimer_try_to_cancel(&spcd->valve_timer);
-
-    // Set the pins low. (valve OFF)
-    gpiod_set_value(spcd->gpio_out_valve_control, 0);
-
-    // Recalculate the valve duty.
-    if (spcd->valve_period > 0 && spcd->valve_duty_on > 0) {
-        pr_debug("   valve period and duty set.\n");
-
-        spcd->valve_duty_off = ktime_set(0, ktime_sub(spcd->valve_period, spcd->valve_duty_on));
-
-        pr_debug("  on:%lld    off:%lld\n", ktime_to_ns(spcd->valve_duty_on), ktime_to_ns(spcd->valve_duty_off));
-
-        // Set the pin states.
-        // We're going to pulse this pin.
-        spcd->valve_duty_state = 1;
-        gpiod_set_value(spcd->gpio_out_valve_control, spcd->valve_duty_state);
-        pr_debug("  valve_control on.\n");
-
-        // If the duty is 100, valve_duty_off will be 0, and we don't need the timer.
-        if (ktime_to_ns(spcd->valve_duty_off) > 0) {
-            pr_debug("  ENABLING VALVE PWM TIMER\n");
-            // Set a timer for the duty to be on.
-            hrtimer_forward_now(&spcd->valve_timer, spcd->valve_duty_on);
-            // fire the timer.
-            hrtimer_restart(&spcd->valve_timer);
-        } else {
-            pr_debug(" FULL DUTY. NO TIMER\n");
-        }
-    } else {
-        pr_debug("   period or duty zero. Leaving off.\n");
-        spcd->valve_duty_on = ktime_set(0, 0);
-        spcd->valve_duty_off = ktime_set(0, 0);
-    }
-
-    return;
-}
-
-
-/* -- sysfs attributes -- PWM -- */
-static ssize_t blower_duty_cycle_show(struct device *dev, struct device_attribute *attr, char *buf) {
-    struct spcd_data *spcd = dev_get_drvdata(dev);
-
-    return sysfs_emit(buf, "%lld\n", ktime_to_ns(spcd->blower_duty_on));
-}
-
-static ssize_t blower_duty_cycle_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
-    struct spcd_data *spcd = dev_get_drvdata(dev);
-    long dutyonnanos;
-    int err;
-
-    err = kstrtol(buf, 10, &dutyonnanos);
-    if (err) {
-        return err;
-    }
-
-    spcd->blower_duty_on = ktime_set(0, dutyonnanos);
-    spcd_blower_timer_update(spcd);
-
-    return count;
-}
-
-static DEVICE_ATTR_RW(blower_duty_cycle);
-
-
-
-static ssize_t blower_period_show(struct device *dev, struct device_attribute *attr, char *buf) {
-    struct spcd_data *spcd = dev_get_drvdata(dev);
-
-    return sysfs_emit(buf, "%lld\n", ktime_to_ns(spcd->blower_period));
-}
-
-static ssize_t blower_period_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
-    struct spcd_data *spcd = dev_get_drvdata(dev);
-    long periodnanos;
-    int err;
-
-    err = kstrtol(buf, 10, &periodnanos);
-    if (err) {
-        return err;
-    }
-
-    spcd->blower_period = ktime_set(0, periodnanos);
-    spcd_blower_timer_update(spcd);
-
-    return count;
-}
-
-static DEVICE_ATTR_RW(blower_period);
-
-
-
-static ssize_t valve_duty_cycle_show(struct device *dev, struct device_attribute *attr, char *buf) {
-    struct spcd_data *spcd = dev_get_drvdata(dev);
-
-    return sysfs_emit(buf, "%lld\n", ktime_to_ns(spcd->valve_duty_on));
-}
-
-static ssize_t valve_duty_cycle_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
-    struct spcd_data *spcd = dev_get_drvdata(dev);
-    long dutynanos;
-    int err;
-
-    err = kstrtol(buf, 10, &dutynanos);
-    if (err) {
-            return err;
-    }
-
-    spcd->valve_duty_on = ktime_set(0, dutynanos);
-    spcd_valve_timer_update(spcd);
-
-    return count;
-}
-
-static DEVICE_ATTR_RW(valve_duty_cycle);
-
-
-
-static ssize_t valve_period_show(struct device *dev, struct device_attribute *attr, char *buf) {
-    struct spcd_data *spcd = dev_get_drvdata(dev);
-
-    return sysfs_emit(buf, "%lld\n", ktime_to_ns(spcd->valve_period));
-}
-
-static ssize_t valve_period_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
-    struct spcd_data *spcd = dev_get_drvdata(dev);
-    long periodnanos;
-    int err;
-
-    err = kstrtol(buf, 10, &periodnanos);
-    if (err) {
-        return err;
-    }
-
-    spcd->valve_period = ktime_set(0, periodnanos);
-    spcd_valve_timer_update(spcd);
-
-    return count;
-}
-
-static DEVICE_ATTR_RW(valve_period);
 
 
 /* sysfs Attributes -- INPUTS */
@@ -340,6 +164,7 @@ static ssize_t status_12v_show(struct device *dev, struct device_attribute *attr
 
     return sysfs_emit(buf, "%d\n", val);
 }
+
 static DEVICE_ATTR_RO(status_12v);
 
 static ssize_t valve_open_show(struct device *dev, struct device_attribute *attr, char *buf) {
@@ -352,8 +177,8 @@ static ssize_t valve_open_show(struct device *dev, struct device_attribute *attr
 
     return sysfs_emit(buf, "%d\n", val);
 }
-static DEVICE_ATTR_RO(valve_open);
 
+static DEVICE_ATTR_RO(valve_open);
 
 
 static ssize_t overpressure_show(struct device *dev, struct device_attribute *attr, char *buf) {
@@ -366,8 +191,8 @@ static ssize_t overpressure_show(struct device *dev, struct device_attribute *at
 
     return sysfs_emit(buf, "%d\n", val);
 }
-static DEVICE_ATTR_RO(overpressure);
 
+static DEVICE_ATTR_RO(overpressure);
 
 
 static ssize_t stuck_on_show(struct device *dev, struct device_attribute *attr, char *buf) {
@@ -380,7 +205,21 @@ static ssize_t stuck_on_show(struct device *dev, struct device_attribute *attr, 
 
     return sysfs_emit(buf, "%d\n", val);
 }
+
 static DEVICE_ATTR_RO(stuck_on);
+
+static ssize_t failsafe_status_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+
+    int val = gpiod_get_value(spcd->gpio_in_failsafe);
+    if (val < 0) {
+        return val;
+    }
+
+    return sysfs_emit(buf, "%d\n", val);
+}
+
+static DEVICE_ATTR_RO(failsafe_status);
 
 
 /* sfs attributes -- OUTPUTS */
@@ -394,6 +233,7 @@ static ssize_t mode_switch_show(struct device *dev, struct device_attribute *att
 
     return sysfs_emit(buf, "%d\n", val);
 }
+
 static DEVICE_ATTR_RO(mode_switch);
 
 static ssize_t pwr_hold_show(struct device *dev, struct device_attribute *attr, char *buf) {
@@ -421,8 +261,8 @@ static ssize_t pwr_hold_store(struct device *dev, struct device_attribute *attr,
 
     return count;
 }
-static DEVICE_ATTR_RW(pwr_hold);
 
+static DEVICE_ATTR_RW(pwr_hold);
 
 
 static ssize_t wdt_alert_show(struct device *dev, struct device_attribute *attr, char *buf) {
@@ -450,14 +290,13 @@ static ssize_t wdt_alert_store(struct device *dev, struct device_attribute *attr
 
     return count;
 }
+
 static DEVICE_ATTR_RW(wdt_alert);
 
-
-
-static ssize_t one_min_show(struct device *dev, struct device_attribute *attr, char *buf) {
+static ssize_t failsafe_enable_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
 
-    int val = gpiod_get_value_cansleep(spcd->gpio_out_1min);
+    int val = gpiod_get_value_cansleep(spcd->gpio_out_failsafe_enable);
     if (val < 0) {
         return val;
     }
@@ -465,8 +304,9 @@ static ssize_t one_min_show(struct device *dev, struct device_attribute *attr, c
     return sysfs_emit(buf, "%d\n", val);
 }
 
-static ssize_t one_min_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+static ssize_t failsafe_enable_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
+
     int val;
     int err;
 
@@ -475,127 +315,113 @@ static ssize_t one_min_store(struct device *dev, struct device_attribute *attr, 
         return err;
     }
 
-    gpiod_set_value_cansleep(spcd->gpio_out_1min, val);
+    gpiod_set_value_cansleep(spcd->gpio_out_failsafe_enable, val);
 
     return count;
 }
-static DEVICE_ATTR_RW(one_min);
 
+static DEVICE_ATTR_RW(failsafe_enable);
 
-static ssize_t buzzer_show(struct device *dev, struct device_attribute *attr, char *buf) {
+/* -- sysfs attributes -- PWM -- */
+static ssize_t blower_duty_cycle_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
-
-    unsigned long *values;
-    unsigned long *zeros;
-    int val;
-
-
-    pr_debug("  check low\n");
-    val = gpiod_get_value_cansleep(spcd->gpio_out_buzzer_low);
-    if (val == 0) { // Not low, check medium.
-        values = bitmap_alloc(3, GFP_KERNEL);
-        if (!values) {
-            return -ENOMEM;
-        }
-        bitmap_zero(values, 3);
-
-        zeros = bitmap_alloc(3, GFP_KERNEL);
-        if (!zeros) {
-            return -ENOMEM;
-        }
-        bitmap_zero(zeros, 3);
-
-        pr_debug("   check medium\n");
-        val = gpiod_get_array_value_cansleep(2, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
-        if (val >= 0 && bitmap_equal(values, zeros, 2) == 0) {
-            val = 2;
-        }
-
-        if (val == 0) { // Not medium. Check high.
-            pr_debug("    check high\n");
-            val = gpiod_get_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
-            if (val >= 0 && bitmap_equal(values, zeros, 3) == 0) {
-                val = 3;
-            }
-        }
-
-        bitmap_free(values);
-        bitmap_free(zeros);
-    }
-
-    if (val < 0) {
-        return val;
-    }
-
-    return sysfs_emit(buf, "%d\n", val);
+    return sysfs_emit(buf, "%lld\n", ktime_to_ns(spcd->blower_state.duty_cycle));
 }
 
-static ssize_t buzzer_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+static ssize_t blower_duty_cycle_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
-
-    unsigned long *values;
-    int val;
+    long dutyonnanos;
     int err;
-
-    // Parse the mode value.
-    err = kstrtoint(buf, 10, &val);
+    err = kstrtol(buf, 10, &dutyonnanos);
     if (err) {
         return err;
     }
-    if (val < 0 || val > 3) {
-        return -EINVAL;
-    }
-
-    // Allocate a bitmap of appropriate size
-    values = bitmap_alloc(3, GFP_KERNEL);
-    if (!values) {
-        return -ENOMEM;
-    }
-    bitmap_zero(values, 3);
-
-    // Turn off everything
-    gpiod_set_value_cansleep(spcd->gpio_out_buzzer_low, 0);
-    gpiod_set_array_value_cansleep(2, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
-    gpiod_set_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
-
-    if (val == 1) {
-        gpiod_set_value_cansleep(spcd->gpio_out_buzzer_low, 1);
-    } else if (val == 2) {
-        pr_debug("set medium\n");
-        pr_debug(" before fill=%ld\n", values);
-        bitmap_fill(values, 2);
-        pr_debug(" after fill=%ld\n", values);
-        gpiod_set_array_value_cansleep(2, spcd->gpio_out_buzzer_medium->desc, spcd->gpio_out_buzzer_medium->info, values);
-    } else if (val == 3) {
-        pr_debug("set high\n");
-        bitmap_fill(values, 3);
-        gpiod_set_array_value_cansleep(3, spcd->gpio_out_buzzer_high->desc, spcd->gpio_out_buzzer_high->info, values);
-    }
-
-    bitmap_free(values);
-
+    spcd->blower_state.duty_cycle = ktime_set(0, dutyonnanos);
+    spcd_set_state(spcd);
     return count;
 }
-static DEVICE_ATTR_RW(buzzer);
+
+static DEVICE_ATTR_RW(blower_duty_cycle);
 
 
+static ssize_t blower_period_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+    return sysfs_emit(buf, "%lld\n", ktime_to_ns(spcd->blower_state.period));
+}
 
+static ssize_t blower_period_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+    long periodnanos;
+    int err;
+    err = kstrtol(buf, 10, &periodnanos);
+    if (err) {
+        return err;
+    }
+    spcd->blower_state.period = ktime_set(0, periodnanos);
+    spcd_set_state(spcd);
+    return count;
+}
+
+static DEVICE_ATTR_RW(blower_period);
+
+
+static ssize_t valve_duty_cycle_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+    return sysfs_emit(buf, "%lld\n", ktime_to_ns(spcd->valve_state.duty_cycle));
+}
+
+static ssize_t valve_duty_cycle_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+    long dutynanos;
+    int err;
+
+    err = kstrtol(buf, 10, &dutynanos);
+    if (err) {
+        return err;
+    }
+    spcd->valve_state.duty_cycle = ktime_set(0, dutynanos);
+    spcd_set_state(spcd);
+    return count;
+}
+
+static DEVICE_ATTR_RW(valve_duty_cycle);
+
+static ssize_t valve_period_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+    return sysfs_emit(buf, "%lld\n", ktime_to_ns(spcd->valve_state.period));
+}
+
+static ssize_t valve_period_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+    long periodnanos;
+    int err;
+
+    err = kstrtol(buf, 10, &periodnanos);
+    if (err) {
+        return err;
+    }
+    spcd->valve_state.period = ktime_set(0, periodnanos);
+    spcd_set_state(spcd);
+    return count;
+}
+
+static DEVICE_ATTR_RW(valve_period);
 
 
 static struct attribute *spcd_attrs[] = {
-        &dev_attr_blower_duty_cycle.attr,
-        &dev_attr_blower_period.attr,
-        &dev_attr_valve_duty_cycle.attr,
-        &dev_attr_valve_period.attr,
         &dev_attr_status_12v.attr,
         &dev_attr_valve_open.attr,
         &dev_attr_overpressure.attr,
         &dev_attr_stuck_on.attr,
+        &dev_attr_failsafe_status.attr,
         &dev_attr_mode_switch.attr,
         &dev_attr_pwr_hold.attr,
         &dev_attr_wdt_alert.attr,
-        &dev_attr_one_min.attr,
-        &dev_attr_buzzer.attr,
+        &dev_attr_failsafe_enable.attr,
+        &dev_attr_blower_duty_cycle.attr,
+        &dev_attr_blower_period.attr,
+        &dev_attr_valve_period.attr,
+        &dev_attr_valve_duty_cycle.attr,
 
         NULL
 };
@@ -612,6 +438,12 @@ ATTRIBUTE_GROUPS(spcd);
  * Moving to bottom-half IRQs shouldn't greatly impact things.
  */
 static irqreturn_t spcd_handle_12v_status_irq(int irq, void *dev_id) {
+    // struct spcd_data *spcd = dev_id;
+    pr_debug(" %s\n", __FUNCTION__);
+    return IRQ_HANDLED;
+}
+
+static irqreturn_t spcd_handle_failsafe_status_irq(int irq, void *dev_id) {
     // struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
     return IRQ_HANDLED;
@@ -642,11 +474,6 @@ static irqreturn_t spcd_handle_mode_irq(int irq, void *dev_id) {
 }
 
 
-
-
-
-
-
 static int spcd_probe(struct platform_device *pdev) {
     struct device *dev = &pdev->dev;
     struct spcd_data *spcd_data;
@@ -661,6 +488,35 @@ static int spcd_probe(struct platform_device *pdev) {
         return -ENOMEM;
     }
     spcd_data->dev = dev;
+    spcd_data->cpu_heartbeat_value = 0;
+    spcd_data->cpu_heartbeat_period = ktime_set(30, 0);
+    INIT_WORK(&spcd_data->heartbeat_work, heartbeat_handler);
+    init_waitqueue_head(&spcd_data->heartbeat_wq);
+
+    // spcd_data->input_dirty = false;
+
+    // PWM devices from device tree bindings
+    spcd_data->pwmd_blower = devm_pwm_get(dev, "blower");
+    if (IS_ERR(spcd_data->pwmd_blower)) {
+        dev_err(dev, "failed to acquire blower PWM device. err=%ld\n", PTR_ERR(spcd_data->pwmd_blower));
+        return PTR_ERR(spcd_data->pwmd_blower);
+    }
+    pwm_init_state(spcd_data->pwmd_blower, &(spcd_data->blower_state));
+    spcd_data->blower_state.period = 2000000; //500hz
+    spcd_data->blower_state.polarity = PWM_POLARITY_NORMAL;
+    pwm_set_relative_duty_cycle(&(spcd_data->blower_state), 0, 100);
+
+
+    spcd_data->pwmd_valve = devm_pwm_get(dev, "valve");
+    if (IS_ERR(spcd_data->pwmd_valve)) {
+        dev_err(dev, "failed to acquire valve PWM device. err=%ld\n", PTR_ERR(spcd_data->pwmd_valve));
+        return PTR_ERR(spcd_data->pwmd_valve);
+    }
+    pwm_init_state(spcd_data->pwmd_valve, &(spcd_data->valve_state));
+    spcd_data->valve_state.period = 2000000; //500hz
+    spcd_data->valve_state.polarity = PWM_POLARITY_NORMAL;
+    pwm_set_relative_duty_cycle(&(spcd_data->valve_state), 0, 100);
+
 
     // Setup Input GPIOS and IRQs
     spcd_data->gpio_in_12v_status = devm_gpiod_get(dev, "in-12v-status", GPIOD_IN);
@@ -672,6 +528,17 @@ static int spcd_probe(struct platform_device *pdev) {
     if (spcd_data->irq_12v_status < 0) {
         dev_err(dev, "failed to get IRQ for in_12v_status: err=%d\n", spcd_data->irq_12v_status);
         return spcd_data->irq_12v_status;
+    }
+
+    spcd_data->gpio_in_failsafe = devm_gpiod_get(dev, "in-failsafe-status", GPIOD_IN);
+    if (IS_ERR(spcd_data->gpio_in_failsafe)) {
+        dev_err(dev, "failed to get in-failsafe-status-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_failsafe));
+        return PTR_ERR(spcd_data->gpio_in_failsafe);
+    }
+    spcd_data->irq_failsafe_status = gpiod_to_irq(spcd_data->gpio_in_failsafe);
+    if (spcd_data->irq_failsafe_status < 0) {
+        dev_err(dev, "failed to get IRQ for in_failsafe_status: err=%d\n", spcd_data->irq_failsafe_status);
+        return spcd_data->irq_failsafe_status;
     }
 
 
@@ -737,73 +604,33 @@ static int spcd_probe(struct platform_device *pdev) {
         return PTR_ERR(spcd_data->gpio_out_wdt_alert);
     }
 
-    spcd_data->gpio_out_blower_control = devm_gpiod_get(dev, "out-blower-control", GPIOD_OUT_LOW);
-    if (IS_ERR(spcd_data->gpio_out_blower_control)) {
-        dev_err(dev, "failed to get out-blower-control-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_blower_control));
-        return PTR_ERR(spcd_data->gpio_out_blower_control);
-    }
-
-    spcd_data->gpio_out_valve_control = devm_gpiod_get(dev, "out-valve-control", GPIOD_OUT_LOW);
-    if (IS_ERR(spcd_data->gpio_out_valve_control)) {
-        dev_err(dev, "failed to get out-valve-control-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_valve_control));
-        return PTR_ERR(spcd_data->gpio_out_valve_control);
-    }
-
-
 
     // All outputs on the I2C expander are open-drain.
-    spcd_data->gpio_out_buzzer_low = devm_gpiod_get(dev, "out-buzzer-low", GPIOD_OUT_LOW_OPEN_DRAIN);
-    if (IS_ERR(spcd_data->gpio_out_buzzer_low)) {
-        dev_err(dev, "failed to get out-buzzer-low-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_low));
-        return PTR_ERR(spcd_data->gpio_out_buzzer_low);
-    }
-    spcd_data->gpio_out_buzzer_medium = devm_gpiod_get_array(dev, "out-buzzer-medium", GPIOD_OUT_LOW_OPEN_DRAIN);
-    if (IS_ERR(spcd_data->gpio_out_buzzer_medium)) {
-        dev_err(dev, "failed to get out-buzzer-medium-gpios: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_medium));
-        return PTR_ERR(spcd_data->gpio_out_buzzer_medium);
-    }
-    spcd_data->gpio_out_buzzer_high = devm_gpiod_get_array(dev, "out-buzzer-high", GPIOD_OUT_LOW_OPEN_DRAIN);
-    if (IS_ERR(spcd_data->gpio_out_buzzer_high)) {
-        dev_err(dev, "failed to get out-buzzer-high-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_buzzer_high));
-        return PTR_ERR(spcd_data->gpio_out_buzzer_high);
+    spcd_data->gpio_out_failsafe_enable = devm_gpiod_get(dev, "out-failsafe-enable", GPIOD_OUT_LOW_OPEN_DRAIN);
+    if (IS_ERR(spcd_data->gpio_out_failsafe_enable)) {
+        dev_err(dev, "failed to get out-failsafe-enable-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_failsafe_enable));
+        return PTR_ERR(spcd_data->gpio_out_failsafe_enable);
     }
     spcd_data->gpio_out_blower_stat = devm_gpiod_get(dev, "out-blower-stat", GPIOD_OUT_LOW_OPEN_DRAIN);
     if (IS_ERR(spcd_data->gpio_out_blower_stat)) {
         dev_err(dev, "failed to get out-blower-stat-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_blower_stat));
         return PTR_ERR(spcd_data->gpio_out_blower_stat);
     }
-    spcd_data->gpio_out_1min = devm_gpiod_get(dev, "out-1min", GPIOD_OUT_LOW_OPEN_DRAIN);
-    if (IS_ERR(spcd_data->gpio_out_1min)) {
-        dev_err(dev, "failed to get out-1min-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_1min));
-        return PTR_ERR(spcd_data->gpio_out_1min);
+    spcd_data->gpio_out_cpu_heartbeat = devm_gpiod_get(dev, "out-cpu-heartbeat", GPIOD_OUT_LOW_OPEN_DRAIN);
+    if (IS_ERR(spcd_data->gpio_out_cpu_heartbeat)) {
+        dev_err(dev, "failed to get out-cpu-heartbeat-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_cpu_heartbeat));
+        return PTR_ERR(spcd_data->gpio_out_cpu_heartbeat);
     }
 
-    spcd_data->blower_period = ktime_set(0, 0);
-    spcd_data->blower_duty_on = ktime_set(0, 0);
-    spcd_data->blower_duty_off = ktime_set(0, 0);
-    spcd_data->blower_duty_state = 0;
-
-    spcd_data->valve_period = ktime_set(0, 0);
-    spcd_data->valve_duty_on = ktime_set(0, 0);
-    spcd_data->valve_duty_off = ktime_set(0, 0);
-    spcd_data->valve_duty_state = 0;
-
-    // TODO: Initial GPIO state tracking vars.
-
-    // Setup softPWM hardware timers.
-    hrtimer_init(&spcd_data->blower_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED_HARD);
-    spcd_data->blower_timer.function = blower_timer_callback;
-
-    hrtimer_init(&spcd_data->valve_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED_HARD);
-    spcd_data->valve_timer.function = valve_timer_callback;
-
+    // Setup initial GPIO states
+    spcd_data->failsafe_enable = 0;
 
     platform_set_drvdata(pdev, spcd_data);
 
-    // TODO sync state with a set / read.
-    spcd_blower_timer_update(spcd_data);
-    spcd_valve_timer_update(spcd_data);
-
+    // sync initial state
+    pr_debug("  Setting state\n");
+    spcd_set_state(spcd_data);
+    spcd_read_state(spcd_data);
 
     // Associate sysfs attribute groups.
     ret = sysfs_create_groups(&pdev->dev.kobj, spcd_groups);
@@ -819,6 +646,15 @@ static int spcd_probe(struct platform_device *pdev) {
     }
     if (ret) {
         dev_err(&pdev->dev, "couldn't request irq %s %d: %d\n", "irq_12v_status", spcd_data->irq_12v_status, ret);
+        return ret;
+    }
+
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_failsafe_status, NULL, spcd_handle_failsafe_status_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_failsafe_status", spcd_data);
+    if (ret == -ENOSYS) {
+        return -EPROBE_DEFER;
+    }
+    if (ret) {
+        dev_err(&pdev->dev, "couldn't request irq %s %d: %d\n", "irq_failsafe_status", spcd_data->irq_failsafe_status, ret);
         return ret;
     }
 
@@ -858,6 +694,11 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
+    // Then startup the heartbeat timer.
+    hrtimer_init(&spcd_data->cpu_heartbeat_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+    spcd_data->cpu_heartbeat_timer.function = cpu_heartbeat_timer_callback;
+    hrtimer_start(&spcd_data->cpu_heartbeat_timer, spcd_data->cpu_heartbeat_period, HRTIMER_MODE_REL_SOFT);
+
     // Fall through to success
     return ret;
 }
@@ -892,7 +733,7 @@ static struct platform_driver spcd_driver = {
 
 module_platform_driver(spcd_driver);
 
-MODULE_AUTHOR("bryan.varner@e-gineering.com");
-MODULE_DESCRIPTION("AVT SPCD Platform Driver.");
+MODULE_AUTHOR("bryan.varner@robustified.com");
+MODULE_DESCRIPTION("AVT SPCD Platform Driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:spcd");
