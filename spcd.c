@@ -35,6 +35,7 @@
 #include <linux/pwm.h>
 #include <linux/uaccess.h>
 #include <linux/hrtimer.h>
+#include <linux/workqueue.h>
 // Added to support sysfs_emit, being pulled in from newer kernel releases.
 #include <linux/mm.h>
 #include <linux/bug.h>
@@ -42,6 +43,15 @@
 
 struct spcd_data {
     struct device *dev;
+
+    bool input_dirty;
+    bool status_12v;
+    bool status_failsafe;
+    bool status_valve_open;
+    bool status_overpressure;
+    bool status_stuckon;
+    bool status_dealer_enable;
+
     struct gpio_desc *gpio_in_12v_status;
     int irq_12v_status;
 
@@ -79,10 +89,20 @@ struct spcd_data {
     u8 cpu_heartbeat_value;
     ktime_t cpu_heartbeat_period;
 
-    struct work_struct heartbeat_work;
-    wait_queue_head_t heartbeat_wq;
+    struct work_struct heartbeat;
+    wait_queue_head_t heartbeat_queue;
+
+    /* workqueue support for reading gpio lines on i2c expanders */
+    struct mutex readexp_mutex;
+    struct work_struct readexp;
+    wait_queue_head_t readexp_queue;
+    u8 expLinesToRead;
 };
 
+#define READ_VALVE_OPEN 0x01
+#define READ_OVERPRESSURE 0x02
+#define READ_STUCKON 0x04
+#define READ_DEALER 0x08
 
 // Shamelessly cribbed from newer kernel versions (5.17.5)
 // Having this here, greatly reduces our repetition.
@@ -103,25 +123,57 @@ int sysfs_emit(char *buf, const char *fmt, ...) {
 }
 
 static void heartbeat_handler(struct work_struct *work) {
-    struct spcd_data *spcd = container_of(work, struct spcd_data, heartbeat_work);
+    struct spcd_data *spcd = container_of(work, struct spcd_data, heartbeat);
 
     pr_debug(" write heartbeat: %d\n", spcd->cpu_heartbeat_value);
     gpiod_set_value_cansleep(spcd->gpio_out_cpu_heartbeat, spcd->cpu_heartbeat_value);
 }
 
 
+static void read_exp_handler(struct work_struct *work) {
+    struct spcd_data *spcd = container_of(work, struct spcd_data, readexp);
+    pr_debug("   read_exp_handler\n");
+    mutex_lock(&spcd->readexp_mutex);
+    if (spcd->expLinesToRead & READ_VALVE_OPEN) {
+        spcd->status_valve_open = gpiod_get_value_cansleep(spcd->gpio_in_valve_open) == 1;
+        spcd->expLinesToRead &= ~READ_VALVE_OPEN;
+        pr_debug("   READ_VALVE_OPEN: %s\n", spcd->status_valve_open ? "true" : "false");
+    }
+    if (spcd->expLinesToRead & READ_OVERPRESSURE) {
+        spcd->status_overpressure = gpiod_get_value_cansleep(spcd->gpio_in_overpressure) == 1;
+        spcd->expLinesToRead &= ~READ_OVERPRESSURE;
+        pr_debug("   READ_OVERPRESSURE: %s\n", spcd->status_overpressure ? "true" : "false");
+    }
+    if (spcd->expLinesToRead & READ_STUCKON) {
+        spcd->status_stuckon = gpiod_get_value_cansleep(spcd->gpio_in_stuckon) == 1;
+        spcd->expLinesToRead &= ~READ_STUCKON;
+        pr_debug("   READ_STUCKON: %s\n", spcd->status_stuckon ? "true" : "false");
+    }
+    if (spcd->expLinesToRead & READ_DEALER) {
+        spcd->status_dealer_enable = gpiod_get_value_cansleep(spcd->gpio_in_mode) == 1;
+        spcd->expLinesToRead &= ~READ_DEALER;
+        pr_debug("   READ_DEALER: %s\n", spcd->status_dealer_enable ? "true" : "false");
+    }
+    spcd->expLinesToRead = 0x00;
+    spcd->input_dirty = true;
+    mutex_unlock(&spcd->readexp_mutex);
+    // TODO: wake_up_interruptible(...);
+}
+
+
+
 // Timer that fires every 30 seconds to produce the heartbeat pulse.
 // If the blower has a non-0 duty cycle the pin state will be toggled.
 // If the blower has a 0 duty cycle, the pin will be set 0 and held there.
-enum hrtimer_restart cpu_heartbeat_timer_callback(struct hrtimer *timer) {
+static enum hrtimer_restart cpu_heartbeat_timer_callback(struct hrtimer *timer) {
     struct spcd_data *spcd = container_of(timer, struct spcd_data, cpu_heartbeat_timer);
 
     if (spcd->blower_state.duty_cycle > 0) {
         spcd->cpu_heartbeat_value = spcd->cpu_heartbeat_value ^ 1;
-        schedule_work(&spcd->heartbeat_work);
+        schedule_work(&spcd->heartbeat);
     } else if (spcd->cpu_heartbeat_value != 0) {
         spcd->cpu_heartbeat_value = 0;
-        schedule_work(&spcd->heartbeat_work);
+        schedule_work(&spcd->heartbeat);
     }
 
     hrtimer_forward_now(&spcd->cpu_heartbeat_timer, spcd->cpu_heartbeat_period);
@@ -431,45 +483,79 @@ ATTRIBUTE_GROUPS(spcd);
 /* -- Interrupt Handlers -- */
 /*
  * All interrupt handlers are treated as bottom half threaded interrupts.
- * This is due to the use of the max7313 i2C GPIO expander, which allows
- * gpio lines (reads / writes) to 'sleep'. Since these are not memory-mapped
- * output lines, it takes some overhead for the i2c communications.
- *
- * Moving to bottom-half IRQs shouldn't greatly impact things.
+ * Due to the use of the max7313 i2C GPIO expander, which allows
+ * gpio lines (reads / writes) to 'sleep' any I/O to read the state of that
+ * device will need to happen in a work_queue.
  */
-static irqreturn_t spcd_handle_12v_status_irq(int irq, void *dev_id) {
-    // struct spcd_data *spcd = dev_id;
+static irqreturn_t spcd_handle_status_12v(int irq, void *dev_id) {
+    struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
+    spcd->status_12v = gpiod_get_value(spcd->gpio_in_12v_status) == 1;
+    spcd->input_dirty = true;
+    // TODO: wake_up_interruptible(...);
+
     return IRQ_HANDLED;
 }
 
 static irqreturn_t spcd_handle_failsafe_status_irq(int irq, void *dev_id) {
-    // struct spcd_data *spcd = dev_id;
+    struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
+    spcd->status_failsafe = gpiod_get_value(spcd->gpio_in_failsafe) == 1;
+    spcd->input_dirty = true;
+    // TODO: wake_up_interruptible(...);
     return IRQ_HANDLED;
 }
 
-static irqreturn_t spcd_handle_valve_irq(int irq, void *dev_id) {
-    // struct spcd_data *spcd = dev_id;
+static irqreturn_t spcd_handle_valve_open_irq(int irq, void *dev_id) {
+    struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
+
+    mutex_lock(&spcd->readexp_mutex);
+    spcd->expLinesToRead |= READ_VALVE_OPEN;
+    mutex_unlock(&spcd->readexp_mutex);
+
+    schedule_work(&spcd->readexp);
+
     return IRQ_HANDLED;
 }
 
 static irqreturn_t spcd_handle_overpressure_irq(int irq, void *dev_id) {
-    // struct spcd_data *spcd = dev_id;
+    struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
+
+    mutex_lock(&spcd->readexp_mutex);
+    spcd->expLinesToRead |= READ_OVERPRESSURE;
+    mutex_unlock(&spcd->readexp_mutex);
+
+    schedule_work(&spcd->readexp);
+
     return IRQ_HANDLED;
 }
 
 static irqreturn_t spcd_handle_stuckon_irq(int irq, void *dev_id) {
-    // struct spcd_data *spcd = dev_id;
+    struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
+
+    mutex_lock(&spcd->readexp_mutex);
+    spcd->expLinesToRead |= READ_STUCKON;
+    mutex_unlock(&spcd->readexp_mutex);
+
+    schedule_work(&spcd->readexp);
+
     return IRQ_HANDLED;
 }
 
 static irqreturn_t spcd_handle_mode_irq(int irq, void *dev_id) {
-    // struct spcd_data *spcd = dev_id;
+    struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
+    pr_debug("  %s\n", __FUNCTION__);
+    mutex_lock(&spcd->readexp_mutex);
+    spcd->expLinesToRead |= READ_DEALER;
+    mutex_unlock(&spcd->readexp_mutex);
+
+    pr_debug("   scheduling READ_DEALER");
+    schedule_work(&spcd->readexp);
+
     return IRQ_HANDLED;
 }
 
@@ -490,8 +576,13 @@ static int spcd_probe(struct platform_device *pdev) {
     spcd_data->dev = dev;
     spcd_data->cpu_heartbeat_value = 0;
     spcd_data->cpu_heartbeat_period = ktime_set(30, 0);
-    INIT_WORK(&spcd_data->heartbeat_work, heartbeat_handler);
-    init_waitqueue_head(&spcd_data->heartbeat_wq);
+    mutex_init(&spcd_data->readexp_mutex);
+
+    INIT_WORK(&spcd_data->heartbeat, heartbeat_handler);
+    init_waitqueue_head(&spcd_data->heartbeat_queue);
+
+    INIT_WORK(&spcd_data->readexp, read_exp_handler);
+    init_waitqueue_head(&spcd_data->readexp_queue);
 
     // spcd_data->input_dirty = false;
 
@@ -640,7 +731,7 @@ static int spcd_probe(struct platform_device *pdev) {
     }
 
     // Now that everything is setup and initialized, request IRQs and assign handlers.
-    ret = devm_request_threaded_irq(dev, spcd_data->irq_12v_status, NULL, spcd_handle_12v_status_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_12v_status", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_12v_status, NULL, spcd_handle_status_12v, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_12v_status", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
@@ -658,7 +749,7 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    ret = devm_request_threaded_irq(dev, spcd_data->irq_valve_open, NULL, spcd_handle_valve_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_valve_open", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_valve_open, NULL, spcd_handle_valve_open_irq, IRQF_TRIGGER_RISING | IRQF_ONESHOT, "spcd_valve_open", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
@@ -666,6 +757,7 @@ static int spcd_probe(struct platform_device *pdev) {
         dev_err(&pdev->dev, "couldn't request irq %s %d: %d\n", "irq_valve_open", spcd_data->irq_valve_open, ret);
         return ret;
     }
+
 
     ret = devm_request_threaded_irq(dev, spcd_data->irq_overpressure, NULL, spcd_handle_overpressure_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_overpressure", spcd_data);
     if (ret == -ENOSYS) {
