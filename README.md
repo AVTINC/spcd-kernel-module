@@ -45,7 +45,7 @@ valve_duty_cycle
 
 These files are read/write, and specify the timing in _nanoseconds_ for the PWM Square wave.
 
-Example: Set blower 50% duty cycle at 100Hz
+Example: Set blower 50% duty_cycle cycle at 100Hz
 ```
 echo "10000000" > /sys/bus/platform/devices/spcd@0/blower_period
 echo "5000000" > /sys/bus/platform/devices/spcd@0/blower_duty_cycle
