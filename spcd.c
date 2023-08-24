@@ -578,6 +578,7 @@ static irqreturn_t spcd_handle_failsafe_status_irq(int irq, void *dev_id) {
     spcd->status_failsafe = gpiod_get_value(spcd->gpio_in_failsafe) == 1;
     spcd->input_dirty = true;
     wake_up_interruptible(&spcd_rq);
+
     return IRQ_HANDLED;
 }
 
