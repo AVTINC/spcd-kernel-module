@@ -249,18 +249,18 @@ static enum hrtimer_restart valve_timer_callback(struct hrtimer *timer) {
 
 
 static int spcd_set_state(struct spcd_data *spcd) {
-    pr_alert("spcd_set_state():\n");
-    pr_alert("  failsafe_enable: %s\n", spcd->failsafe_enable > 0 ? "on" : "off");
+    pr_debug("spcd_set_state():\n");
+    pr_debug("  failsafe_enable: %s\n", spcd->failsafe_enable > 0 ? "on" : "off");
     gpiod_set_value_cansleep(spcd->gpio_out_failsafe_enable, spcd->failsafe_enable);
-    pr_alert("  blower_stat: %s\n", spcd->blower_state.duty_cycle > 0 ? "on" : "off");
+    pr_debug("  blower_stat: %s\n", spcd->blower_state.duty_cycle > 0 ? "on" : "off");
     gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, spcd->blower_state.duty_cycle > 0 ? 1 : 0);
 
 //    gpiod_set_value(spcd->gpio_out_pwr_hold, 0); // TODO: Future. Currently DNP.
 //    gpiod_set_value(spcd->gpio_out_wdt_alert, 0); // TODO: Set this if we restart 'unclean'.
 
-    pr_alert("  blower [duty_cycle:%llu, period:%llu, enabled: %s]\n", spcd->blower_state.duty_cycle, spcd->blower_state.period, spcd->blower_state.enabled ? "true" : "false");
+    pr_debug("  blower [duty_cycle:%llu, period:%llu, enabled: %s]\n", spcd->blower_state.duty_cycle, spcd->blower_state.period, spcd->blower_state.enabled ? "true" : "false");
     pwm_apply_state(spcd->pwmd_blower, &(spcd->blower_state));
-    pr_alert("  valve [duty_cycle:%llu, period:%llu, enabled: %s]\n", spcd->valve_state.duty_cycle, spcd->valve_state.period, spcd->valve_state.enabled ? "true" : "false");
+    pr_debug("  valve [duty_cycle:%llu, period:%llu, enabled: %s]\n", spcd->valve_state.duty_cycle, spcd->valve_state.period, spcd->valve_state.enabled ? "true" : "false");
     pwm_apply_state(spcd->pwmd_valve, &(spcd->valve_state));
 
     return 0;
@@ -684,18 +684,18 @@ ssize_t spcd_write(struct file *filp, const char __user *buf, size_t count, loff
 
     // Continue processing further commands.
     if (cmd == CMD_SET_BLOWER_PWM) {
-        pr_alert("  set blower\n");
+        pr_debug("  set blower\n");
         copy_from_user(&l, buf_read_loc, sizeof(u64));
-        pr_alert("    current blower_state.period: %llu\n", spcd_data->blower_state.period);
+        pr_debug("    current blower_state.period: %llu\n", spcd_data->blower_state.period);
         buf_read_loc+=sizeof(u64);
         spcd_data->blower_state.period = l;
-        pr_alert("    period: %llu  blower_state.period: %llu\n", l, spcd_data->blower_state.period);
+        pr_debug("    period: %llu  blower_state.period: %llu\n", l, spcd_data->blower_state.period);
 
         copy_from_user(&l, buf_read_loc, sizeof(u64));
         buf_read_loc+=sizeof(u64);
-        pr_alert("    current blower_state.duty: %llu\n", (spcd_data->blower_state.duty_cycle));
+        pr_debug("    current blower_state.duty: %llu\n", (spcd_data->blower_state.duty_cycle));
         spcd_data->blower_state.duty_cycle = l;
-        pr_alert("    duty_cycle: %llu  blower_state.duty: %llu\n", l, (spcd_data->blower_state.duty_cycle));
+        pr_debug("    duty_cycle: %llu  blower_state.duty: %llu\n", l, (spcd_data->blower_state.duty_cycle));
 
         // Set the enabled flag based on the current duty_cycle.
         spcd_data->blower_state.enabled = spcd_data->blower_state.duty_cycle > 0;
@@ -705,26 +705,26 @@ ssize_t spcd_write(struct file *filp, const char __user *buf, size_t count, loff
         // Set the blower PWM.
         pwm_apply_state(spcd_data->pwmd_blower, &(spcd_data->blower_state));
     } else if (cmd == CMD_SET_VALVE_PWM) {
-        pr_alert("  set valve pwm\n");
+        pr_debug("  set valve pwm\n");
         copy_from_user(&cycles, buf_read_loc, sizeof(u8));
         buf_read_loc+=sizeof(u8);
-        pr_alert("    cycles to read: %d\n", cycles);
+        pr_debug("    cycles to read: %d\n", cycles);
 
         // cyles is a byte, so we don't need to swap byte order.
         nStates = kcalloc(cycles, sizeof(struct spcd_valve_state), GFP_KERNEL);
         for (i = 0; i < cycles; i++) {
-            pr_alert("      reading cycle: %d\n", i);
+            pr_debug("      reading cycle: %d\n", i);
             copy_from_user(&(nStates[i].period), buf_read_loc, sizeof(u64));
             buf_read_loc+=sizeof(u64);
-            pr_alert("        period: %llu\n", nStates[i].period);
+            pr_debug("        period: %llu\n", nStates[i].period);
 
             copy_from_user(&(nStates[i].duty_cycle), buf_read_loc, sizeof(u64));
             buf_read_loc+=sizeof(u64);
-            pr_alert("        duty_cycle: %llu\n", nStates[i].duty_cycle);
+            pr_debug("        duty_cycle: %llu\n", nStates[i].duty_cycle);
 
             copy_from_user(&(nStates[i].duration), buf_read_loc, sizeof(u64));
             buf_read_loc+=sizeof(u64);
-            pr_alert("        duration: %lld\n", nStates[i].duration);
+            pr_debug("        duration: %lld\n", nStates[i].duration);
         }
 
         // Update the list of states
@@ -736,7 +736,7 @@ ssize_t spcd_write(struct file *filp, const char __user *buf, size_t count, loff
         spcd_data->valve_state_count = cycles;
     } else if (cmd == CMD_START_VALVE_CYCLE) {
         if (spcd_data->valve_state_count > 0) {
-            pr_alert("  Start valve_timer");
+            pr_debug("  Start valve_timer");
             // Set the current step to a number we won't normally get to.
             // When the callback is invoked, we will start at the first cycle.
             spcd_data->valve_state_current = spcd_data->valve_state_count;
