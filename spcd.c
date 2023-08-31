@@ -65,6 +65,7 @@ struct spcd_data {
 
     struct gpio_desc *gpio_in_valve_open;
     int irq_valve_open;
+    int irq_valve_close;
 
     struct gpio_desc *gpio_in_overpressure;
     int irq_overpressure;
@@ -175,7 +176,7 @@ static void read_exp_handler(struct work_struct *work) {
     struct spcd_data *spcd = container_of(work, struct spcd_data, readexp);
     pr_debug("   read_exp_handler\n");
     mutex_lock(&spcd->readexp_mutex);
-    if (spcd->expLinesToRead & READ_VALVE_OPEN) {
+    if (spcd->expLinesToRead & READ_VALVE_OPEN) { // todo: Remove. Unused due to using separate IRQS for valve state management for improved timing.
         spcd->status_valve_open = gpiod_get_value_cansleep(spcd->gpio_in_valve_open) == 1;
         spcd->expLinesToRead &= ~READ_VALVE_OPEN;
         pr_debug("   READ_VALVE_OPEN: %s\n", spcd->status_valve_open ? "true" : "false");
@@ -582,15 +583,24 @@ static irqreturn_t spcd_handle_failsafe_status_irq(int irq, void *dev_id) {
     return IRQ_HANDLED;
 }
 
-static irqreturn_t spcd_handle_valve_irq(int irq, void *dev_id) {
+static irqreturn_t spcd_handle_valve_open_irq(int irq, void *dev_id) {
     struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
 
-    mutex_lock(&spcd->readexp_mutex);
-    spcd->expLinesToRead |= READ_VALVE_OPEN;
-    mutex_unlock(&spcd->readexp_mutex);
+    spcd->status_valve_open = true;
+    spcd->input_dirty = true;
+    wake_up_interruptible(&spcd_rq);
 
-    schedule_work(&spcd->readexp);
+    return IRQ_HANDLED;
+}
+
+static irqreturn_t spcd_handle_valve_close_irq(int irq, void *dev_id) {
+    struct spcd_data *spcd = dev_id;
+    pr_debug(" %s\n", __FUNCTION__);
+
+    spcd->status_valve_open = false;
+    spcd->input_dirty = true;
+    wake_up_interruptible(&spcd_rq);
 
     return IRQ_HANDLED;
 }
@@ -1007,12 +1017,20 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    ret = devm_request_threaded_irq(dev, spcd_data->irq_valve_open, NULL, spcd_handle_valve_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_valve_open", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_valve_open, NULL, spcd_handle_valve_open_irq, IRQF_TRIGGER_RISING | IRQF_ONESHOT, "spcd_valve_open", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
     if (ret) {
         dev_err(&pdev->dev, "couldn't request irq %s %d: %d\n", "irq_valve_open", spcd_data->irq_valve_open, ret);
+        return ret;
+    }
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_valve_close, NULL, spcd_handle_valve_close_irq, IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_valve_close", spcd_data);
+    if (ret == -ENOSYS) {
+        return -EPROBE_DEFER;
+    }
+    if (ret) {
+        dev_err(&pdev->dev, "couldn't request irq %s %d: %d\n", "irq_valve_close", spcd_data->irq_valve_close, ret);
         return ret;
     }
 
