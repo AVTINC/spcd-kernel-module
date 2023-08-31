@@ -582,7 +582,7 @@ static irqreturn_t spcd_handle_failsafe_status_irq(int irq, void *dev_id) {
     return IRQ_HANDLED;
 }
 
-static irqreturn_t spcd_handle_valve_open_irq(int irq, void *dev_id) {
+static irqreturn_t spcd_handle_valve_irq(int irq, void *dev_id) {
     struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
 
@@ -1007,7 +1007,7 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    ret = devm_request_threaded_irq(dev, spcd_data->irq_valve_open, NULL, spcd_handle_valve_open_irq, IRQF_TRIGGER_RISING | IRQF_ONESHOT, "spcd_valve_open", spcd_data);
+    ret = devm_request_threaded_irq(dev, spcd_data->irq_valve_open, NULL, spcd_handle_valve_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_valve_open", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
     }
