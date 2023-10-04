@@ -52,6 +52,9 @@ struct spcd_data {
 	struct gpio_desc	*gpio_in_mode;
 	int			irq_mode;
 
+	struct gpio_desc	*gpio_in_pwmfeedback;
+	int			irq_pwmfeedback;
+
 
 	struct gpio_desc	*gpio_out_pwr_hold; // Unused
 	struct gpio_desc	*gpio_out_wdt_alert;
@@ -409,6 +412,18 @@ static int spcd_probe(struct platform_device *pdev) {
 		return spcd_data->irq_mode;
 	}
 	devm_request_irq(dev, spcd_data->irq_mode, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_mode", spcd_data);
+
+	spcd_data->gpio_in_pwmfeedback = devm_gpiod_get(dev, "in-pwmfeedback", GPIOD_IN);
+	if (IS_ERR(spcd_data->gpio_in_pwmfeedback)) {
+		dev_err(dev, "failed to get in-mode-pwmfeedback: err=%ld\n", PTR_ERR(spcd_data->gpio_in_pwmfeedback));
+		return PTR_ERR(spcd_data->gpio_in_pwmfeedback);
+	}
+	spcd_data->irq_pwmfeedback = gpiod_to_irq(spcd_data->gpio_in_pwmfeedback);
+	if (spcd_data->irq_pwmfeedback < 0) {
+		dev_err(dev, "failed to get IRQ for in_pwmfeedback: err=%d\n", spcd_data->irq_pwmfeedback);
+		return spcd_data->irq_pwmfeedback;
+	}
+	devm_request_irq(dev, spcd_data->irq_pwmfeedback, spcd_handle_irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "spcd_pwmfeedback", spcd_data);
 
 
 
