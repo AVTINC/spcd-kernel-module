@@ -54,11 +54,13 @@ struct spcd_data {
 
     bool input_dirty;
     bool status_12v;
+    bool status_preboot_stat;
     bool status_failsafe;
     bool status_valve_open;
     bool status_overpressure;
     bool status_stuckon;
     bool status_dealer_enable;
+    bool status_postboot_stat;
 
     struct gpio_desc *gpio_in_12v_status;
     int irq_12v_status;
@@ -78,12 +80,14 @@ struct spcd_data {
     struct gpio_desc *gpio_in_failsafe;
     int irq_failsafe_status;
 
+    struct gpio_desc *gpio_in_preboot_stat; // Don't request an IRQ for this one.
+
     struct pwm_device *pwmd_blower;
     struct pwm_device *pwmd_valve;
 
 
     struct gpio_desc *gpio_out_pwr_hold; // Unused
-    struct gpio_desc *gpio_out_wdt_alert;
+    struct gpio_desc *gpio_out_postboot_stat;
 
     struct gpio_desc *gpio_out_failsafe_enable;
     struct gpio_desc *gpio_out_blower_stat;
@@ -256,7 +260,7 @@ static int spcd_set_state(struct spcd_data *spcd) {
     gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, spcd->blower_state.duty_cycle > 0 ? 1 : 0);
 
 //    gpiod_set_value(spcd->gpio_out_pwr_hold, 0); // TODO: Future. Currently DNP.
-//    gpiod_set_value(spcd->gpio_out_wdt_alert, 0); // TODO: Set this if we restart 'unclean'.
+    gpiod_set_value(spcd->gpio_out_postboot_stat, spcd->status_postboot_stat == true ? 1 : 0);
 
     pr_debug("  blower [duty_cycle:%llu, period:%llu, enabled: %s]\n", spcd->blower_state.duty_cycle, spcd->blower_state.period, spcd->blower_state.enabled ? "true" : "false");
     pwm_apply_state(spcd->pwmd_blower, &(spcd->blower_state));
@@ -268,6 +272,7 @@ static int spcd_set_state(struct spcd_data *spcd) {
 
 static int spcd_read_state(struct spcd_data *spcd) {
     spcd->status_12v = gpiod_get_value(spcd->gpio_in_12v_status) == 1;
+    spcd->status_preboot_stat = gpiod_get_value(spcd->gpio_in_preboot_stat) == 1;
     spcd->status_failsafe = gpiod_get_value(spcd->gpio_in_failsafe) == 1;
     // The following reads can sleep.
     spcd->status_valve_open = gpiod_get_value_cansleep(spcd->gpio_in_valve_open) == 1;
@@ -350,6 +355,19 @@ static DEVICE_ATTR_RO(failsafe_status);
 
 
 /* sfs attributes -- OUTPUTS */
+static ssize_t preboot_stat_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+
+    int val = gpiod_get_value(spcd->gpio_in_preboot_stat);
+    if (val < 0) {
+        return val;
+    }
+
+    return sysfs_emit(buf, "%d\n", val);
+}
+
+static DEVICE_ATTR_RO(preboot_stat);
+
 static ssize_t mode_switch_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
 
@@ -392,10 +410,10 @@ static ssize_t pwr_hold_store(struct device *dev, struct device_attribute *attr,
 static DEVICE_ATTR_RW(pwr_hold);
 
 
-static ssize_t wdt_alert_show(struct device *dev, struct device_attribute *attr, char *buf) {
+static ssize_t postboot_stat_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
 
-    int val = gpiod_get_value(spcd->gpio_out_wdt_alert);
+    int val = gpiod_get_value(spcd->gpio_out_postboot_stat);
     if (val < 0) {
         return val;
     }
@@ -403,7 +421,7 @@ static ssize_t wdt_alert_show(struct device *dev, struct device_attribute *attr,
     return sysfs_emit(buf, "%d\n", val);
 }
 
-static ssize_t wdt_alert_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+static ssize_t postboot_stat_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
     int val;
     int err;
@@ -413,12 +431,12 @@ static ssize_t wdt_alert_store(struct device *dev, struct device_attribute *attr
         return err;
     }
 
-    gpiod_set_value(spcd->gpio_out_wdt_alert, val);
-
+    gpiod_set_value(spcd->gpio_out_postboot_stat, val);
+    pr_err(" %s setting %d\n", __FUNCTION__, val);
     return count;
 }
 
-static DEVICE_ATTR_RW(wdt_alert);
+static DEVICE_ATTR_RW(postboot_stat);
 
 static ssize_t failsafe_enable_show(struct device *dev, struct device_attribute *attr, char *buf) {
     struct spcd_data *spcd = dev_get_drvdata(dev);
@@ -543,7 +561,8 @@ static struct attribute *spcd_attrs[] = {
         &dev_attr_failsafe_status.attr,
         &dev_attr_mode_switch.attr,
         &dev_attr_pwr_hold.attr,
-        &dev_attr_wdt_alert.attr,
+        &dev_attr_preboot_stat.attr,
+        &dev_attr_postboot_stat.attr,
         &dev_attr_failsafe_enable.attr,
         &dev_attr_blower_duty_cycle.attr,
         &dev_attr_blower_period.attr,
@@ -767,6 +786,7 @@ ssize_t spcd_read(struct file *filp, char __user *buf, size_t count, loff_t *pos
     // Note: This device _never_ returns an EOF. The next read is an atomic attempt to read the entire device state.
 
     // Pack the bits into a single byte and copy that to the user space buffer.
+    state |= spcd_data->status_preboot_stat << 6;
     state |= spcd_data->status_12v << 5;
     state |= spcd_data->status_failsafe << 4;
     state |= spcd_data->status_valve_open << 3;
@@ -879,6 +899,12 @@ static int spcd_probe(struct platform_device *pdev) {
         return spcd_data->irq_12v_status;
     }
 
+    spcd_data->gpio_in_preboot_stat = devm_gpiod_get(dev, "in-preboot-stat", GPIOD_IN);
+    if (IS_ERR(spcd_data->gpio_in_preboot_stat)) {
+        dev_err(dev, "failed to get in-preboot-stat-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_preboot_stat));
+        return PTR_ERR(spcd_data->gpio_in_preboot_stat);
+    }
+
     spcd_data->gpio_in_failsafe = devm_gpiod_get(dev, "in-failsafe-status", GPIOD_IN);
     if (IS_ERR(spcd_data->gpio_in_failsafe)) {
         dev_err(dev, "failed to get in-failsafe-status-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_failsafe));
@@ -947,10 +973,12 @@ static int spcd_probe(struct platform_device *pdev) {
         return PTR_ERR(spcd_data->gpio_out_pwr_hold);
     }
 
-    spcd_data->gpio_out_wdt_alert = devm_gpiod_get(dev, "out-wdt-alert", GPIOD_OUT_LOW);
-    if (IS_ERR(spcd_data->gpio_out_wdt_alert)) {
-        dev_err(dev, "failed to get out-wdt-alert-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_wdt_alert));
-        return PTR_ERR(spcd_data->gpio_out_wdt_alert);
+    // SBC Outputs default to open-drain with internal pull-ups. Electrical 'defaults to high' pre init on the SBC GPIOS is a problematic flicker.
+    // So we set those up open drain to get around it.
+    spcd_data->gpio_out_postboot_stat = devm_gpiod_get(dev, "out-postboot-stat", GPIOD_OUT_HIGH_OPEN_DRAIN);
+    if (IS_ERR(spcd_data->gpio_out_postboot_stat)) {
+        dev_err(dev, "failed to get out-postboot-stat-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_postboot_stat));
+        return PTR_ERR(spcd_data->gpio_out_postboot_stat);
     }
 
 
