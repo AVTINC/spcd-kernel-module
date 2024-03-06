@@ -432,7 +432,6 @@ static ssize_t postboot_stat_store(struct device *dev, struct device_attribute *
     }
 
     gpiod_set_value(spcd->gpio_out_postboot_stat, val);
-    pr_err(" %s setting %d\n", __FUNCTION__, val);
     return count;
 }
 
