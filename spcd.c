@@ -60,6 +60,7 @@ struct spcd_data {
     bool status_overpressure;
     bool status_stuckon;
     bool status_dealer_enable;
+    bool status_postboot_stat;
 
     struct gpio_desc *gpio_in_12v_status;
     int irq_12v_status;
@@ -259,6 +260,7 @@ static int spcd_set_state(struct spcd_data *spcd) {
     gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, spcd->blower_state.duty_cycle > 0 ? 1 : 0);
 
 //    gpiod_set_value(spcd->gpio_out_pwr_hold, 0); // TODO: Future. Currently DNP.
+    gpiod_set_value(spcd->gpio_out_postboot_stat, spcd->status_postboot_stat == true ? 1 : 0);
 
     pr_debug("  blower [duty_cycle:%llu, period:%llu, enabled: %s]\n", spcd->blower_state.duty_cycle, spcd->blower_state.period, spcd->blower_state.enabled ? "true" : "false");
     pwm_apply_state(spcd->pwmd_blower, &(spcd->blower_state));
@@ -430,7 +432,6 @@ static ssize_t postboot_stat_store(struct device *dev, struct device_attribute *
     }
 
     gpiod_set_value(spcd->gpio_out_postboot_stat, val);
-
     return count;
 }
 
