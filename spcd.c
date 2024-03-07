@@ -974,7 +974,7 @@ static int spcd_probe(struct platform_device *pdev) {
 
     // SBC Outputs default to open-drain with internal pull-ups. Electrical 'defaults to high' pre init on the SBC GPIOS is a problematic flicker.
     // So we set those up open drain to get around it.
-    spcd_data->gpio_out_postboot_stat = devm_gpiod_get(dev, "out-postboot-stat", GPIOD_OUT_HIGH_OPEN_DRAIN);
+    spcd_data->gpio_out_postboot_stat = devm_gpiod_get(dev, "out-postboot-stat", GPIOD_OUT_LOW_OPEN_DRAIN);
     if (IS_ERR(spcd_data->gpio_out_postboot_stat)) {
         dev_err(dev, "failed to get out-postboot-stat-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_out_postboot_stat));
         return PTR_ERR(spcd_data->gpio_out_postboot_stat);
