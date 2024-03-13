@@ -52,6 +52,9 @@ struct spcd_data {
     struct cdev cdev;
     dev_t cdev_num;
 
+    bool boot_preboot_stat;
+    bool boot_dealer_enable;
+
     bool input_dirty;
     bool status_12v;
     bool status_preboot_stat;
@@ -785,7 +788,8 @@ ssize_t spcd_read(struct file *filp, char __user *buf, size_t count, loff_t *pos
     // Note: This device _never_ returns an EOF. The next read is an atomic attempt to read the entire device state.
 
     // Pack the bits into a single byte and copy that to the user space buffer.
-    state |= spcd_data->status_preboot_stat << 6;
+    state |= spcd_data->boot_dealer_enable << 7;
+    state |= spcd_data->status_preboot_stat << 6; // TODO: Should this be the boot_preboot_stat?
     state |= spcd_data->status_12v << 5;
     state |= spcd_data->status_failsafe << 4;
     state |= spcd_data->status_valve_open << 3;
@@ -860,8 +864,6 @@ static int spcd_probe(struct platform_device *pdev) {
 
     INIT_WORK(&spcd_data->readexp, read_exp_handler);
     init_waitqueue_head(&spcd_data->readexp_queue);
-
-    // spcd_data->input_dirty = false;
 
     // PWM devices from device tree bindings
     spcd_data->pwmd_blower = devm_pwm_get(dev, "blower");
@@ -1006,6 +1008,10 @@ static int spcd_probe(struct platform_device *pdev) {
     pr_debug("  Synchronizing struct & device state\n");
     spcd_set_state(spcd_data);
     spcd_read_state(spcd_data);
+
+    // Cache initial values to boot state.
+    spcd_data->boot_dealer_enable = spcd_data->status_dealer_enable;
+    spcd_data->boot_preboot_stat = spcd_data->status_preboot_stat;
 
     // Associate sysfs attribute groups.
     ret = sysfs_create_groups(&pdev->dev.kobj, spcd_groups);
