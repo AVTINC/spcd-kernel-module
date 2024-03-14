@@ -668,6 +668,8 @@ static int spcd_open(struct inode *inode, struct file *filp) {
     }
 
     filp->private_data = spcd_data;
+    // Make the first read() emit the current state of the device.
+    spcd_data->input_dirty = true;
     return 0;
 }
 
@@ -775,7 +777,7 @@ ssize_t spcd_read(struct file *filp, char __user *buf, size_t count, loff_t *pos
     ssize_t readlen = 1;
     u8 state = 0x00;
 
-    // If the data hasn't changes, return that we should try again later.
+    // If the data hasn't changed since the last read, return that we should try again later.
     if (spcd_data->input_dirty == false) {
         return -EAGAIN;
     }
