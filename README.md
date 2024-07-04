@@ -6,16 +6,18 @@ The driver implements a character buffer interface at `/dev/spcd0` that supports
 
 ### Inputs
 Reads occur one byte at a time. Each byte is a packed bitmask.
+The high bit, (bit 7) is set at power-on as a one-shot read of the dealer_enable during driver initialization. 
+If it's high, then the software should start into 'dealer' mode.
 ```
-     X  X  preboot_stat
-     |  |  |  12v
-     |  |  |  |  failsafe
-     |  |  |  |  |  valve_open
-     |  |  |  |  |  |  overpressure
-     |  |  |  |  |  |  |  stuck_on
-     |  |  |  |  |  |  |  |  dealer_enable
-     |  |  |  |  |  |  |  |  |
-Bit: 8  7  6  5  4  3  2  1  0
+     X  preboot_stat
+     |  |  12v
+     |  |  |  failsafe
+     |  |  |  |  valve_open
+     |  |  |  |  |  overpressure
+     |  |  |  |  |  |  stuck_on
+     |  |  |  |  |  |  |  dealer_enable
+     |  |  |  |  |  |  |  |
+Bit: 7  6  5  4  3  2  1  0
 ```
 
 ### Control Commands
@@ -78,13 +80,6 @@ The following files are read/write and will respond to `0` or `1` being written 
 pwr_hold
 postboot_stat
 one_min
-```
-
-Additionally, there is a 'buzzer' file that works with `0`, `1`, `2`, `3`, where 0 is off and 3 is high.
-Example: To set the buzzer to medium and turn it off again:
-```
-echo "2" > /sys/bus/platform/devices/spcd@0/buzzer
-echo "0" > /sys/bus/platform/devices/spcd@0/buzzer
 ```
 
 #### PWM:
