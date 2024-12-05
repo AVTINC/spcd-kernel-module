@@ -36,10 +36,7 @@
 #include <linux/uaccess.h>
 #include <linux/hrtimer.h>
 #include <linux/workqueue.h>
-// Added to support sysfs_emit, being pulled in from newer kernel releases.
-#include <linux/mm.h>
-#include <linux/bug.h>
-#include <linux/slab.h>
+#include <linux/sysfs.h>
 
 struct spcd_valve_state {
     u64 duty_cycle;
@@ -144,26 +141,6 @@ static DECLARE_WAIT_QUEUE_HEAD(spcd_rq);
 // u64 blower duty_cycle cycle
 // u64 valve period
 // u64 valve duty_cycle cycle
-
-
-
-// Shamelessly cribbed from newer kernel versions (5.17.5)
-// Having this here, greatly reduces our repetition.
-// https://elixir.bootlin.com/linux/v5.17.5/C/ident/sysfs_emit
-int sysfs_emit(char *buf, const char *fmt, ...) {
-    va_list args;
-    int len;
-
-    if (WARN(!buf || offset_in_page(buf), "invalid sysfs_emit: buf:%p\n", (void*)buf)) {
-        return 0;
-    }
-
-    va_start(args, fmt);
-    len = vscnprintf(buf, PAGE_SIZE, fmt, args);
-    va_end(args);
-
-    return len;
-}
 
 static void valve_ctrl_handler(struct work_struct *work) {
     struct spcd_data *spcd = container_of(work, struct spcd_data, valve_ctrl);
