@@ -1126,7 +1126,7 @@ static int spcd_remove(struct platform_device *pdev) {
 
 
 static const struct of_device_id of_spcd_match[] = {
-        {.compatible = "avt,spcd",},
+        {.compatible = "avt,spcd"},
         {},
 };
 
@@ -1143,7 +1143,7 @@ static struct platform_driver spcd_driver = {
         },
 };
 
-module_platform_driver(spcd_driver);
+module_platform_driver_probe(spcd_driver, spcd_probe);
 
 MODULE_AUTHOR("bryan.varner@robustified.com");
 MODULE_DESCRIPTION("AVT SPCD Platform Driver");
