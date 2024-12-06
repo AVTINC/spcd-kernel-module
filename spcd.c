@@ -1129,7 +1129,6 @@ static const struct of_device_id of_spcd_match[] = {
         {.compatible = "avt,spcd"},
         {},
 };
-
 MODULE_DEVICE_TABLE(of, of_spcd_match);
 
 static struct platform_driver spcd_driver = {
