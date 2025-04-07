@@ -110,6 +110,7 @@ struct spcd_data {
     wait_queue_head_t readexp_queue;
     u8 expLinesToRead;
 
+    struct mutex valve_mutex;
     struct spcd_valve_state *valve_states;
     struct hrtimer valve_timer;
     u8 valve_state_count;
@@ -215,6 +216,8 @@ static enum hrtimer_restart valve_timer_callback(struct hrtimer *timer) {
     struct spcd_data *spcd = container_of(timer, struct spcd_data, valve_timer);
     pr_debug(" %s\n", __FUNCTION__);
 
+    mutex_lock(&spcd->valve_mutex);
+
     // Next step
     spcd->valve_state_current++;
     // Handle looping.
@@ -223,10 +226,12 @@ static enum hrtimer_restart valve_timer_callback(struct hrtimer *timer) {
     }
 
     // Apply the state, set the timer, go on with life.
-    spcd->valve_state.period = ktime_set(0, spcd->valve_states[spcd->valve_state_current].period);
-    spcd->valve_state.duty_cycle = ktime_set(0, spcd->valve_states[spcd->valve_state_current].duty_cycle);
+    spcd->valve_state.period = ns_to_ktime(spcd->valve_states[spcd->valve_state_current].period);
+    spcd->valve_state.duty_cycle = ns_to_ktime(spcd->valve_states[spcd->valve_state_current].duty_cycle);
     schedule_work(&spcd->valve_ctrl);
-    hrtimer_forward_now(&spcd->valve_timer, ktime_set(0, spcd->valve_states[spcd->valve_state_current].duration));
+    hrtimer_forward_now(&spcd->valve_timer, ns_to_ktime(spcd->valve_states[spcd->valve_state_current].duration));
+
+    mutex_unlock(&spcd->valve_mutex);
 
     return HRTIMER_RESTART;
 }
@@ -460,7 +465,7 @@ static ssize_t blower_duty_cycle_store(struct device *dev, struct device_attribu
     if (err) {
         return err;
     }
-    spcd->blower_state.duty_cycle = ktime_set(0, dutyonnanos);
+    spcd->blower_state.duty_cycle = ns_to_ktime(dutyonnanos);
     spcd_set_state(spcd);
     return count;
 }
@@ -481,7 +486,7 @@ static ssize_t blower_period_store(struct device *dev, struct device_attribute *
     if (err) {
         return err;
     }
-    spcd->blower_state.period = ktime_set(0, periodnanos);
+    spcd->blower_state.period = ns_to_ktime(periodnanos);
     spcd_set_state(spcd);
     return count;
 }
@@ -503,7 +508,7 @@ static ssize_t valve_duty_cycle_store(struct device *dev, struct device_attribut
     if (err) {
         return err;
     }
-    spcd->valve_state.duty_cycle = ktime_set(0, dutynanos);
+    spcd->valve_state.duty_cycle = ns_to_ktime(dutynanos);
     spcd_set_state(spcd);
     return count;
 }
@@ -524,7 +529,7 @@ static ssize_t valve_period_store(struct device *dev, struct device_attribute *a
     if (err) {
         return err;
     }
-    spcd->valve_state.period = ktime_set(0, periodnanos);
+    spcd->valve_state.period = ns_to_ktime(periodnanos);
     spcd_set_state(spcd);
     return count;
 }
@@ -709,6 +714,8 @@ ssize_t spcd_write(struct file *filp, const char __user *buf, size_t count, loff
         buf_read_loc+=sizeof(u8);
         pr_debug("    cycles to read: %d\n", cycles);
 
+        mutex_lock(&spcd_data->valve_mutex);
+
         // cyles is a byte, so we don't need to swap byte order.
         nStates = kcalloc(cycles, sizeof(struct spcd_valve_state), GFP_KERNEL);
         for (i = 0; i < cycles; i++) {
@@ -733,6 +740,8 @@ ssize_t spcd_write(struct file *filp, const char __user *buf, size_t count, loff
         spcd_data->valve_state_current = 0;
         spcd_data->valve_states = nStates;
         spcd_data->valve_state_count = cycles;
+
+        mutex_unlock(&spcd_data->valve_mutex);
     } else if (cmd == CMD_START_VALVE_CYCLE) {
         if (spcd_data->valve_state_count > 0) {
             pr_debug("  Start valve_timer");
@@ -830,6 +839,7 @@ static int spcd_probe(struct platform_device *pdev) {
     spcd_data->cpu_heartbeat_value = 0;
     spcd_data->cpu_heartbeat_period = ktime_set(30, 0);
     mutex_init(&spcd_data->readexp_mutex);
+    mutex_init(&spcd_data->valve_mutex);
     spcd_data->valve_state_count = 0;
     spcd_data->valve_state_current = 0;
     spcd_data->valve_states = NULL;
