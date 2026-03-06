@@ -267,6 +267,10 @@ static enum hrtimer_restart valve_timer_callback(struct hrtimer *timer) {
     spcd->valve_state.duty_cycle = ns_to_ktime(spcd->valve_states[spcd->valve_state_current].duty_cycle);
 
     if (spcd->blower_state_count > 0 && spcd->blower_states != NULL) {
+        /*
+         * Blower phase follows valve phase index.
+         * If sequence lengths differ, wrap blower index modulo blower_state_count.
+         */
         u8 blower_state_current = spcd->valve_state_current % spcd->blower_state_count;
         spcd->blower_state.period = ns_to_ktime(spcd->blower_states[blower_state_current].period);
         spcd->blower_state.duty_cycle = ns_to_ktime(spcd->blower_states[blower_state_current].duty_cycle);
@@ -744,6 +748,7 @@ ssize_t spcd_write(struct file *filp, const char __user *buf, size_t count, loff
     if (cmd == CMD_SET_BLOWER_PWM) {
         pr_debug("  set blower\n");
         if (payload_len >= (sizeof(u8) + (2 * sizeof(u64))) && ((payload_len - sizeof(u8)) % (2 * sizeof(u64)) == 0)) {
+            /* New multi-state payload: [cmd][count][period,duty]*count */
             copy_from_user(&cycles, buf_read_loc, sizeof(u8));
             buf_read_loc += sizeof(u8);
             pr_debug("    blower cycles to read: %d\n", cycles);
@@ -776,6 +781,7 @@ ssize_t spcd_write(struct file *filp, const char __user *buf, size_t count, loff
             gpiod_set_value_cansleep(spcd_data->gpio_out_blower_stat, spcd_data->blower_state.duty_cycle > 0 ? 1 : 0);
             pwm_apply_state(spcd_data->pwmd_blower, &(spcd_data->blower_state));
         } else {
+            /* Legacy single-state payload: [cmd][period][duty] */
             copy_from_user(&l, buf_read_loc, sizeof(u64));
             pr_debug("    current blower_state.period: %llu\n", spcd_data->blower_state.period);
             buf_read_loc+=sizeof(u64);

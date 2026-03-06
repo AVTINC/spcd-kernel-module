@@ -80,6 +80,17 @@ Single-byte command, `0x04`.
 #### STOP_VALVE_CYCLE
 Single-byte command, `0x08`.
 
+### Valve Feedback Polarity Notes
+`status_valve_open` (bit 3 in reads from `/dev/spcd0`) is a hardware feedback input, not a command echo.
+
+- `SET_VALVE_PWM` / `START_VALVE_CYCLE` drive PWM intent.
+- `status_valve_open` reports sensed valve-open state from GPIO.
+- User-space should compare intent (`valve_duty_cycle > 0`) against sensed state with a configurable polarity expectation.
+
+Practical test note:
+- If the valve motor is disconnected and feedback defaults low, user-space fault logic will typically classify repeated `unexpected-closed` events (`expected open, read closed`).
+- If feedback defaults high, user-space fault logic will typically classify repeated `unexpected-open` events (`expected closed, read open`).
+
 
 ## Sysfs Interface
 The sysfs interface populates a virtual filesystem under sysfs. Change the working directory to:
