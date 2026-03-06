@@ -24,10 +24,35 @@ Bit: 7  6  5  4  3  2  1  0
 Writes to the character device are commands. Each command has an expected structure:
 
 #### SET_BLOWER_PWM
-One byte command followed by two u64 values representing nanoseconds of period and duty of the PWM.
+`SET_BLOWER_PWM` supports two payload formats:
+
+1) Legacy single-state payload:
 ```
 | 0x01 | u64 (period) | u64 (duty cycle) |
 ```
+
+2) Multi-state (array) payload:
+```
+| 0x01 | u8 (number of cycles) | cycle_definition |
+
+cycle_definition:
+| u64 (period) | u64 (duty cycle) |
+```
+
+When using the array payload, the driver stores the blower sequence and advances blower phases in sync with valve phase transitions during `START_VALVE_CYCLE`.
+
+Example: Alternate blower between two duty cycles every valve step:
+```
+    u8 Command
+    |     u8 Cycle Count
+    |     |               (4) u64 defining the two cycles.
+    |     |               |
+| 0x01 | 0x02 | 0x00000000001E8480 | 0x00000000000927C0 | 0x00000000001E8480 | 0x0000000000000000 |
+```
+The above example is:
+- Phase 0: period `2000000` ns, duty `600000` ns
+- Phase 1: period `2000000` ns, duty `0` ns
+
 #### SET_VALVE_PWM
 One byte command followed by a list of valve PWM states to iterate in a loop.
 Each valve state has a period, duty-cycle, and duration to hold the state before progressing to the next state.
