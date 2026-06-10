@@ -85,6 +85,8 @@ struct spcd_data {
     struct gpio_desc *gpio_in_failsafe;
     int irq_failsafe_status;
 
+    struct gpio_desc *gpio_in_blower_temp_failsafe;
+
     struct gpio_desc *gpio_in_preboot_stat; // Don't request an IRQ for this one.
 
     struct pwm_device *pwmd_blower;
@@ -389,6 +391,19 @@ static ssize_t failsafe_status_show(struct device *dev, struct device_attribute 
 
 static DEVICE_ATTR_RO(failsafe_status);
 
+static ssize_t blower_temp_failsafe_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+
+    int val = gpiod_get_value_cansleep(spcd->gpio_in_blower_temp_failsafe);
+    if (val < 0) {
+        return val;
+    }
+
+    return sysfs_emit(buf, "%d\n", val);
+}
+
+static DEVICE_ATTR_RO(blower_temp_failsafe);
+
 
 /* sfs attributes -- OUTPUTS */
 static ssize_t preboot_stat_show(struct device *dev, struct device_attribute *attr, char *buf) {
@@ -594,6 +609,7 @@ static struct attribute *spcd_attrs[] = {
         &dev_attr_overpressure.attr,
         &dev_attr_stuck_on.attr,
         &dev_attr_failsafe_status.attr,
+    &dev_attr_blower_temp_failsafe.attr,
         &dev_attr_mode_switch.attr,
         &dev_attr_pwr_hold.attr,
         &dev_attr_preboot_stat.attr,
@@ -634,6 +650,16 @@ static irqreturn_t spcd_handle_failsafe_status_irq(int irq, void *dev_id) {
     wake_up_interruptible(&spcd_rq);
 
     return IRQ_HANDLED;
+}
+
+static int claim_input_gpio(struct device *dev, const char *name) {
+    struct gpio_desc *gpio = devm_gpiod_get(dev, name, GPIOD_IN);
+
+    if (IS_ERR(gpio)) {
+        return PTR_ERR(gpio);
+    }
+
+    return 0;
 }
 
 static irqreturn_t spcd_handle_valve_irq(int irq, void *dev_id) {
@@ -1009,6 +1035,43 @@ static int spcd_probe(struct platform_device *pdev) {
     if (spcd_data->irq_failsafe_status < 0) {
         dev_err(dev, "failed to get IRQ for in_failsafe_status: err=%d\n", spcd_data->irq_failsafe_status);
         return spcd_data->irq_failsafe_status;
+    }
+
+    spcd_data->gpio_in_blower_temp_failsafe = devm_gpiod_get(dev, "in-blower-temp-failsafe", GPIOD_IN);
+    if (IS_ERR(spcd_data->gpio_in_blower_temp_failsafe)) {
+        dev_err(dev, "failed to get in-blower-temp-failsafe-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_blower_temp_failsafe));
+        return PTR_ERR(spcd_data->gpio_in_blower_temp_failsafe);
+    }
+
+    ret = claim_input_gpio(dev, "in-blower-temp-failsafe-shadow");
+    if (ret) {
+        dev_err(dev, "failed to get in-blower-temp-failsafe-shadow-gpio\n");
+        return ret;
+    }
+    ret = claim_input_gpio(dev, "in-spare-bridge-p3");
+    if (ret) {
+        dev_err(dev, "failed to get in-spare-bridge-p3-gpio\n");
+        return ret;
+    }
+    ret = claim_input_gpio(dev, "in-spare-bridge-p4");
+    if (ret) {
+        dev_err(dev, "failed to get in-spare-bridge-p4-gpio\n");
+        return ret;
+    }
+    ret = claim_input_gpio(dev, "in-spare-bridge-p5");
+    if (ret) {
+        dev_err(dev, "failed to get in-spare-bridge-p5-gpio\n");
+        return ret;
+    }
+    ret = claim_input_gpio(dev, "in-spare-bridge-p14");
+    if (ret) {
+        dev_err(dev, "failed to get in-spare-bridge-p14-gpio\n");
+        return ret;
+    }
+    ret = claim_input_gpio(dev, "in-spare-bridge-p15");
+    if (ret) {
+        dev_err(dev, "failed to get in-spare-bridge-p15-gpio\n");
+        return ret;
     }
 
 
