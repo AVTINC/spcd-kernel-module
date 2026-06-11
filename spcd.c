@@ -399,6 +399,10 @@ static ssize_t blower_temp_failsafe_show(struct device *dev, struct device_attri
         return val;
     }
 
+    // Keep userspace semantics as "1 = blower temp failsafe tripped".
+    // This input is modeled as active-low in DT to match expander wiring.
+    val = !val;
+
     return sysfs_emit(buf, "%d\n", val);
 }
 
