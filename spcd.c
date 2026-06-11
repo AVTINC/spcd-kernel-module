@@ -662,6 +662,16 @@ static int claim_input_gpio(struct device *dev, const char *name) {
     return 0;
 }
 
+static int claim_optional_input_gpio(struct device *dev, const char *name) {
+    struct gpio_desc *gpio = devm_gpiod_get_optional(dev, name, GPIOD_IN);
+
+    if (IS_ERR(gpio)) {
+        return PTR_ERR(gpio);
+    }
+
+    return 0;
+}
+
 static irqreturn_t spcd_handle_valve_irq(int irq, void *dev_id) {
     struct spcd_data *spcd = dev_id;
     pr_debug(" %s\n", __FUNCTION__);
@@ -1039,36 +1049,36 @@ static int spcd_probe(struct platform_device *pdev) {
 
     spcd_data->gpio_in_blower_temp_failsafe = devm_gpiod_get(dev, "in-blower-temp-failsafe", GPIOD_IN);
     if (IS_ERR(spcd_data->gpio_in_blower_temp_failsafe)) {
-        dev_err(dev, "failed to get in-blower-temp-failsafe-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_blower_temp_failsafe));
+        dev_err(dev, "failed to get in-blower-temp-failsafe-gpio (missing DT property or old DTB?): err=%ld\n", PTR_ERR(spcd_data->gpio_in_blower_temp_failsafe));
         return PTR_ERR(spcd_data->gpio_in_blower_temp_failsafe);
     }
 
-    ret = claim_input_gpio(dev, "in-blower-temp-failsafe-shadow");
+    ret = claim_optional_input_gpio(dev, "in-blower-temp-failsafe-shadow");
     if (ret) {
         dev_err(dev, "failed to get in-blower-temp-failsafe-shadow-gpio\n");
         return ret;
     }
-    ret = claim_input_gpio(dev, "in-spare-bridge-p3");
+    ret = claim_optional_input_gpio(dev, "in-spare-bridge-p3");
     if (ret) {
         dev_err(dev, "failed to get in-spare-bridge-p3-gpio\n");
         return ret;
     }
-    ret = claim_input_gpio(dev, "in-spare-bridge-p4");
+    ret = claim_optional_input_gpio(dev, "in-spare-bridge-p4");
     if (ret) {
         dev_err(dev, "failed to get in-spare-bridge-p4-gpio\n");
         return ret;
     }
-    ret = claim_input_gpio(dev, "in-spare-bridge-p5");
+    ret = claim_optional_input_gpio(dev, "in-spare-bridge-p5");
     if (ret) {
         dev_err(dev, "failed to get in-spare-bridge-p5-gpio\n");
         return ret;
     }
-    ret = claim_input_gpio(dev, "in-spare-bridge-p14");
+    ret = claim_optional_input_gpio(dev, "in-spare-bridge-p14");
     if (ret) {
         dev_err(dev, "failed to get in-spare-bridge-p14-gpio\n");
         return ret;
     }
-    ret = claim_input_gpio(dev, "in-spare-bridge-p15");
+    ret = claim_optional_input_gpio(dev, "in-spare-bridge-p15");
     if (ret) {
         dev_err(dev, "failed to get in-spare-bridge-p15-gpio\n");
         return ret;
