@@ -44,6 +44,11 @@ struct spcd_valve_state {
     s64 duration;
 };
 
+struct spcd_blower_state {
+    u64 duty_cycle;
+    u64 period;
+};
+
 struct spcd_data {
     struct device *dev;
     struct cdev cdev;
@@ -79,6 +84,8 @@ struct spcd_data {
 
     struct gpio_desc *gpio_in_failsafe;
     int irq_failsafe_status;
+
+    struct gpio_desc *gpio_in_blower_temp_failsafe;
 
     struct gpio_desc *gpio_in_preboot_stat; // Don't request an IRQ for this one.
 
@@ -116,6 +123,9 @@ struct spcd_data {
     u8 valve_state_count;
     u8 valve_state_current;
 
+    struct spcd_blower_state *blower_states;
+    u8 blower_state_count;
+
     struct work_struct valve_ctrl;
     wait_queue_head_t valve_ctrl_queue;
 };
@@ -138,6 +148,23 @@ static DECLARE_WAIT_QUEUE_HEAD(spcd_rq);
 
 // chardev I/O
 
+/*
+ * Userspace write protocol:
+ *   byte 0: command (CMD_*)
+ *   command payload:
+ *     CMD_SET_BLOWER_PWM:
+ *       either legacy format:
+ *         u64 period_ns, u64 duty_ns
+ *       or array format:
+ *         u8 cycle_count, then cycle_count entries of:
+ *           u64 period_ns, u64 duty_ns
+ *     CMD_SET_VALVE_PWM:
+ *       u8 cycle_count, then cycle_count entries of:
+ *         u64 period_ns, u64 duty_ns, u64 duration_ns
+ *     CMD_START_VALVE_CYCLE / CMD_STOP_VALVE_CYCLE:
+ *       no additional payload
+ */
+
 // u64 blower period
 // u64 blower duty_cycle cycle
 // u64 valve period
@@ -145,7 +172,10 @@ static DECLARE_WAIT_QUEUE_HEAD(spcd_rq);
 
 static void valve_ctrl_handler(struct work_struct *work) {
     struct spcd_data *spcd = container_of(work, struct spcd_data, valve_ctrl);
+    /* PWM apply can sleep depending on backend, so it is performed in workqueue context. */
     pwm_apply_state(spcd->pwmd_valve, &(spcd->valve_state));
+    gpiod_set_value_cansleep(spcd->gpio_out_blower_stat, spcd->blower_state.duty_cycle > 0 ? 1 : 0);
+    pwm_apply_state(spcd->pwmd_blower, &(spcd->blower_state));
 }
 
 static void heartbeat_handler(struct work_struct *work) {
@@ -159,6 +189,11 @@ static void heartbeat_handler(struct work_struct *work) {
 static void read_exp_handler(struct work_struct *work) {
     struct spcd_data *spcd = container_of(work, struct spcd_data, readexp);
     pr_debug("   read_exp_handler\n");
+
+    /*
+     * Batched read of GPIO expander-backed lines.
+     * IRQ handlers only set bits in expLinesToRead; this worker does the sleeping reads.
+     */
     mutex_lock(&spcd->readexp_mutex);
     if (spcd->expLinesToRead & READ_VALVE_OPEN) {
         spcd->status_valve_open = gpiod_get_value_cansleep(spcd->gpio_in_valve_open) == 1;
@@ -216,6 +251,10 @@ static enum hrtimer_restart valve_timer_callback(struct hrtimer *timer) {
     struct spcd_data *spcd = container_of(timer, struct spcd_data, valve_timer);
     pr_debug(" %s\n", __FUNCTION__);
 
+    /*
+     * Timer callback runs in atomic context.
+     * Only update in-memory state here, then schedule work to apply PWM.
+     */
     mutex_lock(&spcd->valve_mutex);
 
     // Next step
@@ -228,6 +267,18 @@ static enum hrtimer_restart valve_timer_callback(struct hrtimer *timer) {
     // Apply the state, set the timer, go on with life.
     spcd->valve_state.period = ns_to_ktime(spcd->valve_states[spcd->valve_state_current].period);
     spcd->valve_state.duty_cycle = ns_to_ktime(spcd->valve_states[spcd->valve_state_current].duty_cycle);
+
+    if (spcd->blower_state_count > 0 && spcd->blower_states != NULL) {
+        /*
+         * Blower phase follows valve phase index.
+         * If sequence lengths differ, wrap blower index modulo blower_state_count.
+         */
+        u8 blower_state_current = spcd->valve_state_current % spcd->blower_state_count;
+        spcd->blower_state.period = ns_to_ktime(spcd->blower_states[blower_state_current].period);
+        spcd->blower_state.duty_cycle = ns_to_ktime(spcd->blower_states[blower_state_current].duty_cycle);
+        spcd->blower_state.enabled = spcd->blower_state.duty_cycle > 0;
+    }
+
     schedule_work(&spcd->valve_ctrl);
     hrtimer_forward_now(&spcd->valve_timer, ns_to_ktime(spcd->valve_states[spcd->valve_state_current].duration));
 
@@ -238,6 +289,7 @@ static enum hrtimer_restart valve_timer_callback(struct hrtimer *timer) {
 
 
 static int spcd_set_state(struct spcd_data *spcd) {
+    /* Push cached driver state to hardware outputs/PWMs. */
     pr_debug("spcd_set_state():\n");
     pr_debug("  failsafe_enable: %s\n", spcd->failsafe_enable > 0 ? "on" : "off");
     gpiod_set_value_cansleep(spcd->gpio_out_failsafe_enable, spcd->failsafe_enable);
@@ -256,6 +308,7 @@ static int spcd_set_state(struct spcd_data *spcd) {
 }
 
 static int spcd_read_state(struct spcd_data *spcd) {
+    /* Refresh cached input states from GPIOs; mark char device state as changed. */
     spcd->status_12v = gpiod_get_value(spcd->gpio_in_12v_status) == 1;
     spcd->status_preboot_stat = gpiod_get_value(spcd->gpio_in_preboot_stat) == 1;
     spcd->status_failsafe = gpiod_get_value(spcd->gpio_in_failsafe) == 1;
@@ -337,6 +390,19 @@ static ssize_t failsafe_status_show(struct device *dev, struct device_attribute 
 }
 
 static DEVICE_ATTR_RO(failsafe_status);
+
+static ssize_t blower_temp_failsafe_show(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spcd_data *spcd = dev_get_drvdata(dev);
+
+    int val = gpiod_get_value_cansleep(spcd->gpio_in_blower_temp_failsafe);
+    if (val < 0) {
+        return val;
+    }
+
+    return sysfs_emit(buf, "%d\n", val);
+}
+
+static DEVICE_ATTR_RO(blower_temp_failsafe);
 
 
 /* sfs attributes -- OUTPUTS */
@@ -543,6 +609,7 @@ static struct attribute *spcd_attrs[] = {
         &dev_attr_overpressure.attr,
         &dev_attr_stuck_on.attr,
         &dev_attr_failsafe_status.attr,
+    &dev_attr_blower_temp_failsafe.attr,
         &dev_attr_mode_switch.attr,
         &dev_attr_pwr_hold.attr,
         &dev_attr_preboot_stat.attr,
@@ -583,6 +650,26 @@ static irqreturn_t spcd_handle_failsafe_status_irq(int irq, void *dev_id) {
     wake_up_interruptible(&spcd_rq);
 
     return IRQ_HANDLED;
+}
+
+static int claim_input_gpio(struct device *dev, const char *name) {
+    struct gpio_desc *gpio = devm_gpiod_get(dev, name, GPIOD_IN);
+
+    if (IS_ERR(gpio)) {
+        return PTR_ERR(gpio);
+    }
+
+    return 0;
+}
+
+static int claim_optional_input_gpio(struct device *dev, const char *name) {
+    struct gpio_desc *gpio = devm_gpiod_get_optional(dev, name, GPIOD_IN);
+
+    if (IS_ERR(gpio)) {
+        return PTR_ERR(gpio);
+    }
+
+    return 0;
 }
 
 static irqreturn_t spcd_handle_valve_irq(int irq, void *dev_id) {
@@ -667,9 +754,16 @@ ssize_t spcd_write(struct file *filp, const char __user *buf, size_t count, loff
     u8 cmd = 0x00;
     u8 cycles = 0;
     u64 l = 0;
+    size_t payload_len = count - sizeof(cmd);
 
     int i;
     struct spcd_valve_state *nStates;
+    struct spcd_blower_state *nBlowerStates;
+
+    /*
+     * Copy command stream from userspace and update in-kernel state machine.
+     * Current implementation assumes userspace sends a well-formed payload.
+     */
 
     // First byte is the command.
     copy_from_user(&cmd, buf_read_loc, sizeof cmd);
@@ -689,25 +783,69 @@ ssize_t spcd_write(struct file *filp, const char __user *buf, size_t count, loff
     // Continue processing further commands.
     if (cmd == CMD_SET_BLOWER_PWM) {
         pr_debug("  set blower\n");
-        copy_from_user(&l, buf_read_loc, sizeof(u64));
-        pr_debug("    current blower_state.period: %llu\n", spcd_data->blower_state.period);
-        buf_read_loc+=sizeof(u64);
-        spcd_data->blower_state.period = l;
-        pr_debug("    period: %llu  blower_state.period: %llu\n", l, spcd_data->blower_state.period);
+        if (payload_len >= (sizeof(u8) + (2 * sizeof(u64))) && ((payload_len - sizeof(u8)) % (2 * sizeof(u64)) == 0)) {
+            /* New multi-state payload: [cmd][count][period,duty]*count */
+            copy_from_user(&cycles, buf_read_loc, sizeof(u8));
+            buf_read_loc += sizeof(u8);
+            pr_debug("    blower cycles to read: %d\n", cycles);
 
-        copy_from_user(&l, buf_read_loc, sizeof(u64));
-        buf_read_loc+=sizeof(u64);
-        pr_debug("    current blower_state.duty: %llu\n", (spcd_data->blower_state.duty_cycle));
-        spcd_data->blower_state.duty_cycle = l;
-        pr_debug("    duty_cycle: %llu  blower_state.duty: %llu\n", l, (spcd_data->blower_state.duty_cycle));
+            nBlowerStates = kcalloc(cycles, sizeof(struct spcd_blower_state), GFP_KERNEL);
+            for (i = 0; i < cycles; i++) {
+                copy_from_user(&(nBlowerStates[i].period), buf_read_loc, sizeof(u64));
+                buf_read_loc += sizeof(u64);
+                pr_debug("      period: %llu\n", nBlowerStates[i].period);
 
-        // Set the enabled flag based on the current duty_cycle.
-        spcd_data->blower_state.enabled = spcd_data->blower_state.duty_cycle > 0;
+                copy_from_user(&(nBlowerStates[i].duty_cycle), buf_read_loc, sizeof(u64));
+                buf_read_loc += sizeof(u64);
+                pr_debug("      duty_cycle: %llu\n", nBlowerStates[i].duty_cycle);
+            }
 
-        // Update the stat pin based on the current duty_cycle.
-        gpiod_set_value_cansleep(spcd_data->gpio_out_blower_stat, spcd_data->blower_state.duty_cycle > 0 ? 1 : 0);
-        // Set the blower PWM.
-        pwm_apply_state(spcd_data->pwmd_blower, &(spcd_data->blower_state));
+            mutex_lock(&spcd_data->valve_mutex);
+            if (spcd_data->blower_states != NULL) {
+                kfree(spcd_data->blower_states);
+            }
+            spcd_data->blower_states = nBlowerStates;
+            spcd_data->blower_state_count = cycles;
+
+            if (cycles > 0) {
+                spcd_data->blower_state.period = ns_to_ktime(spcd_data->blower_states[0].period);
+                spcd_data->blower_state.duty_cycle = ns_to_ktime(spcd_data->blower_states[0].duty_cycle);
+                spcd_data->blower_state.enabled = spcd_data->blower_state.duty_cycle > 0;
+            }
+            mutex_unlock(&spcd_data->valve_mutex);
+
+            gpiod_set_value_cansleep(spcd_data->gpio_out_blower_stat, spcd_data->blower_state.duty_cycle > 0 ? 1 : 0);
+            pwm_apply_state(spcd_data->pwmd_blower, &(spcd_data->blower_state));
+        } else {
+            /* Legacy single-state payload: [cmd][period][duty] */
+            copy_from_user(&l, buf_read_loc, sizeof(u64));
+            pr_debug("    current blower_state.period: %llu\n", spcd_data->blower_state.period);
+            buf_read_loc+=sizeof(u64);
+            spcd_data->blower_state.period = l;
+            pr_debug("    period: %llu  blower_state.period: %llu\n", l, spcd_data->blower_state.period);
+
+            copy_from_user(&l, buf_read_loc, sizeof(u64));
+            buf_read_loc+=sizeof(u64);
+            pr_debug("    current blower_state.duty: %llu\n", (spcd_data->blower_state.duty_cycle));
+            spcd_data->blower_state.duty_cycle = l;
+            pr_debug("    duty_cycle: %llu  blower_state.duty: %llu\n", l, (spcd_data->blower_state.duty_cycle));
+
+            // Set the enabled flag based on the current duty_cycle.
+            spcd_data->blower_state.enabled = spcd_data->blower_state.duty_cycle > 0;
+
+            // Keep array phase 0 in sync for pressure-control writes using legacy payloads.
+            mutex_lock(&spcd_data->valve_mutex);
+            if (spcd_data->blower_state_count > 0 && spcd_data->blower_states != NULL) {
+                spcd_data->blower_states[0].period = ktime_to_ns(spcd_data->blower_state.period);
+                spcd_data->blower_states[0].duty_cycle = ktime_to_ns(spcd_data->blower_state.duty_cycle);
+            }
+            mutex_unlock(&spcd_data->valve_mutex);
+
+            // Update the stat pin based on the current duty_cycle.
+            gpiod_set_value_cansleep(spcd_data->gpio_out_blower_stat, spcd_data->blower_state.duty_cycle > 0 ? 1 : 0);
+            // Set the blower PWM.
+            pwm_apply_state(spcd_data->pwmd_blower, &(spcd_data->blower_state));
+        }
     } else if (cmd == CMD_SET_VALVE_PWM) {
         pr_debug("  set valve pwm\n");
         copy_from_user(&cycles, buf_read_loc, sizeof(u8));
@@ -718,6 +856,7 @@ ssize_t spcd_write(struct file *filp, const char __user *buf, size_t count, loff
 
         // cyles is a byte, so we don't need to swap byte order.
         nStates = kcalloc(cycles, sizeof(struct spcd_valve_state), GFP_KERNEL);
+        /* Each entry programs one step in the valve PWM sequence. */
         for (i = 0; i < cycles; i++) {
             pr_debug("      reading cycle: %d\n", i);
             copy_from_user(&(nStates[i].period), buf_read_loc, sizeof(u64));
@@ -775,6 +914,7 @@ ssize_t spcd_read(struct file *filp, char __user *buf, size_t count, loff_t *pos
     // Note: This device _never_ returns an EOF. The next read is an atomic attempt to read the entire device state.
 
     // Pack the bits into a single byte and copy that to the user space buffer.
+    // Bit layout (MSB->LSB): boot_dealer, preboot, 12v, failsafe, valve_open, overpressure, stuckon, dealer
     state |= spcd_data->boot_dealer_enable << 7;
     state |= spcd_data->status_preboot_stat << 6; // TODO: Should this be the boot_preboot_stat?
     state |= spcd_data->status_12v << 5;
@@ -830,7 +970,7 @@ static int spcd_probe(struct platform_device *pdev) {
 
     pr_debug(" %s\n", __FUNCTION__);
 
-    // create the driver data....
+    // Allocate and initialize driver-private state.
     spcd_data = kzalloc(sizeof(struct spcd_data), GFP_KERNEL);
     if (!spcd_data) {
         return -ENOMEM;
@@ -843,6 +983,8 @@ static int spcd_probe(struct platform_device *pdev) {
     spcd_data->valve_state_count = 0;
     spcd_data->valve_state_current = 0;
     spcd_data->valve_states = NULL;
+    spcd_data->blower_state_count = 0;
+    spcd_data->blower_states = NULL;
 
     INIT_WORK(&spcd_data->valve_ctrl, valve_ctrl_handler);
     init_waitqueue_head(&spcd_data->valve_ctrl_queue);
@@ -853,7 +995,7 @@ static int spcd_probe(struct platform_device *pdev) {
     INIT_WORK(&spcd_data->readexp, read_exp_handler);
     init_waitqueue_head(&spcd_data->readexp_queue);
 
-    // PWM devices from device tree bindings
+    // Acquire PWM devices from DT bindings and initialize their cached states.
     spcd_data->pwmd_blower = devm_pwm_get(dev, "blower");
     if (IS_ERR(spcd_data->pwmd_blower)) {
         dev_err(dev, "failed to acquire blower PWM device. err=%ld\n", PTR_ERR(spcd_data->pwmd_blower));
@@ -876,7 +1018,7 @@ static int spcd_probe(struct platform_device *pdev) {
     pwm_set_relative_duty_cycle(&(spcd_data->valve_state), 0, 100);
 
 
-    // Setup Input GPIOS and IRQs
+    // Setup input GPIOs and map them to IRQs.
     spcd_data->gpio_in_12v_status = devm_gpiod_get(dev, "in-12v-status", GPIOD_IN);
     if (IS_ERR(spcd_data->gpio_in_12v_status)) {
         dev_err(dev, "failed to get in-12v-status-gpio: err=%ld\n", PTR_ERR(spcd_data->gpio_in_12v_status));
@@ -903,6 +1045,43 @@ static int spcd_probe(struct platform_device *pdev) {
     if (spcd_data->irq_failsafe_status < 0) {
         dev_err(dev, "failed to get IRQ for in_failsafe_status: err=%d\n", spcd_data->irq_failsafe_status);
         return spcd_data->irq_failsafe_status;
+    }
+
+    spcd_data->gpio_in_blower_temp_failsafe = devm_gpiod_get(dev, "in-blower-temp-failsafe", GPIOD_IN);
+    if (IS_ERR(spcd_data->gpio_in_blower_temp_failsafe)) {
+        dev_err(dev, "failed to get in-blower-temp-failsafe-gpio (missing DT property or old DTB?): err=%ld\n", PTR_ERR(spcd_data->gpio_in_blower_temp_failsafe));
+        return PTR_ERR(spcd_data->gpio_in_blower_temp_failsafe);
+    }
+
+    ret = claim_optional_input_gpio(dev, "in-blower-temp-failsafe-shadow");
+    if (ret) {
+        dev_err(dev, "failed to get in-blower-temp-failsafe-shadow-gpio\n");
+        return ret;
+    }
+    ret = claim_optional_input_gpio(dev, "in-spare-bridge-p3");
+    if (ret) {
+        dev_err(dev, "failed to get in-spare-bridge-p3-gpio\n");
+        return ret;
+    }
+    ret = claim_optional_input_gpio(dev, "in-spare-bridge-p4");
+    if (ret) {
+        dev_err(dev, "failed to get in-spare-bridge-p4-gpio\n");
+        return ret;
+    }
+    ret = claim_optional_input_gpio(dev, "in-spare-bridge-p5");
+    if (ret) {
+        dev_err(dev, "failed to get in-spare-bridge-p5-gpio\n");
+        return ret;
+    }
+    ret = claim_optional_input_gpio(dev, "in-spare-bridge-p14");
+    if (ret) {
+        dev_err(dev, "failed to get in-spare-bridge-p14-gpio\n");
+        return ret;
+    }
+    ret = claim_optional_input_gpio(dev, "in-spare-bridge-p15");
+    if (ret) {
+        dev_err(dev, "failed to get in-spare-bridge-p15-gpio\n");
+        return ret;
     }
 
 
@@ -992,12 +1171,12 @@ static int spcd_probe(struct platform_device *pdev) {
 
     platform_set_drvdata(pdev, spcd_data);
 
-    // sync initial state
+    // Synchronize initial cached state to hardware and read initial inputs.
     pr_debug("  Synchronizing struct & device state\n");
     spcd_set_state(spcd_data);
     spcd_read_state(spcd_data);
 
-    // Cache initial values to boot state.
+    // Cache initial values captured at boot for reporting to userspace.
     spcd_data->boot_dealer_enable = spcd_data->status_dealer_enable;
     spcd_data->boot_preboot_stat = spcd_data->status_preboot_stat;
 
@@ -1008,7 +1187,7 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    // Now that everything is setup and initialized, request IRQs and assign handlers.
+    // Request IRQs after all state and workqueues are ready.
     ret = devm_request_threaded_irq(dev, spcd_data->irq_12v_status, NULL, spcd_handle_status_12v, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "spcd_12v_status", spcd_data);
     if (ret == -ENOSYS) {
         return -EPROBE_DEFER;
@@ -1064,16 +1243,16 @@ static int spcd_probe(struct platform_device *pdev) {
         return ret;
     }
 
-    // Then startup the heartbeat timer.
+    // Start periodic heartbeat timer.
     hrtimer_init(&spcd_data->cpu_heartbeat_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
     spcd_data->cpu_heartbeat_timer.function = cpu_heartbeat_timer_callback;
     hrtimer_start(&spcd_data->cpu_heartbeat_timer, spcd_data->cpu_heartbeat_period, HRTIMER_MODE_REL);
 
-    // Setup the valve timer.
+    // Setup valve sequence timer (started on CMD_START_VALVE_CYCLE).
     hrtimer_init(&spcd_data->valve_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
     spcd_data->valve_timer.function = valve_timer_callback;
 
-    // Character Device Support
+    // Character device support (/dev/spcd0)
     alloc_chrdev_region(&(spcd_data->cdev_num), 0, 1, SPCD_DEVICE_NAME);
     spcd_class = class_create(THIS_MODULE, SPCD_CLASS);
 
@@ -1097,11 +1276,11 @@ static void spcd_shutdown(struct platform_device *pdev) {
 
     pr_debug(" %s\n", __FUNCTION__);
 
-    // Cancel any pending timers.
+    // Cancel timers first so no new work is queued while shutting down.
     hrtimer_cancel(&spcd_data->valve_timer);
     hrtimer_cancel(&spcd_data->cpu_heartbeat_timer);
 
-    // Force off the PWMs.
+    // Force PWMs off for safe shutdown.
     spcd_data->blower_state.duty_cycle = 0;
     pwm_apply_state(spcd_data->pwmd_blower, &(spcd_data->blower_state));
     spcd_data->valve_state.duty_cycle = 0;
@@ -1117,9 +1296,12 @@ static int spcd_remove(struct platform_device *pdev) {
 
     spcd_shutdown(pdev);
 
-    // Free any mem allocated for valve_states.
+    // Free any memory allocated for valve cycle states.
     if (spcd_data->valve_states != NULL) {
         kfree(spcd_data->valve_states);
+    }
+    if (spcd_data->blower_states != NULL) {
+        kfree(spcd_data->blower_states);
     }
 
     device_destroy(spcd_class, spcd_data->cdev_num);
